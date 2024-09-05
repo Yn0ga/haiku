@@ -3,6 +3,15 @@ OUTPUT_ARCH(powerpc)
 
 ENTRY(_start)
 SEARCH_DIR("libgcc");
+
+PHDRS
+{
+	headers PT_PHDR PHDRS ;
+	text PT_LOAD FILEHDR PHDRS FLAGS(5) ;
+	data PT_LOAD ;
+	dynamic PT_DYNAMIC ;
+}
+
 SECTIONS
 {
 	. = 0x80000000 + SIZEOF_HEADERS;
@@ -51,12 +60,12 @@ SECTIONS
 		*(.rela.sbss2 .rela.sbss2.* .rela.gnu.linkonce.sb2.*)
 		*(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
 	}
-	.init : { *(.init) } =0x60000000
+	.init : { *(.init) } :text
 
 	/* text/read-only data */
 	.text :	{
 		*(.text .stub .text.* .gnu.linkonce.t.*)
-	} =0x60000000
+	} :text
 
 	.rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*) }
 	.rodata1 : { *(.rodata1) }
@@ -72,10 +81,10 @@ SECTIONS
 	.ctors : { *(.ctors) }
 	__ctor_end = .;
 
-	.dynamic : { *(.dynamic) }
+	.dynamic : { *(.dynamic) } :data :dynamic
 
 	__data_start = .;
-	.data : { *(.data .gnu.linkonce.d.*) }
+	.data : { *(.data .gnu.linkonce.d.*) } :data
 
 	.got : { *(.got.plt) *(.got) }
 	
@@ -87,7 +96,7 @@ SECTIONS
 	.bss : {
 		*(.bss .bss.* .gnu.linkonce.b.*)
 		. = ALIGN(0x1000);
-	}
+	} :data
 
 	_end = . ;
 

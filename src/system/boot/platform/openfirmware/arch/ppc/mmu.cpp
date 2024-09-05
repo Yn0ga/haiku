@@ -709,6 +709,27 @@ callback(struct of_arguments *args)
 	return OF_FAILED;
 }
 
+static int
+dump_segments(segment_descriptor *segments)
+{
+	if (segments == NULL) {
+		dprintf("Warning: segments are NULL\n");
+		return B_ERROR;
+	} else {
+		dprintf("Segments %p\n", segments[0]);
+		dprintf("ID  TP  KS  US  NX  RES  VSID\n");
+		for (uint32 i = 0; i < 16; i++) {
+			dprintf("%-3d %2d %3d %3d %3d %4d %4d\n", i, segments[i].type, \
+										segments[i].kernel_protection_key, \
+										segments[i].user_protection_key,   \
+										segments[i].no_execute_protection, \
+										segments[i]._reserved,             \
+										segments[i].virtual_segment_id);   
+		}
+		return B_OK;
+	}
+}
+
 
 extern "C" status_t
 arch_set_callback(void)
@@ -808,6 +829,7 @@ arch_mmu_init(void)
 	// identity map the first 256 MB (where our code/data reside)
 
 	dprintf("MSR: %p\n", (void *)get_msr());
+	dump_segments(sSegments);
 
 	#if 0
 	block_address_translation bat;
@@ -825,10 +847,13 @@ arch_mmu_init(void)
 	// initialize segment descriptors, but don't set the registers
 	// until we're about to take over the page table - we're mapping
 	// pages into our table using these values
+	// VSID below 1024 will cause Qemu/OpenBIOS to lock up when trying
+	// to set segment register later on, and real hardware seems to be
+	// ok with it
 
 	for (int32 i = 0; i < 16; i++)
-		sSegments[i].virtual_segment_id = i;
-
+		sSegments[i].virtual_segment_id = i + 0x400; // Qemu doesn't like VSID below 1024
+ 
 	// find already allocated ranges of physical memory
 	// and the virtual address space
 
@@ -891,6 +916,8 @@ arch_mmu_init(void)
 		ppc_set_segment_register((void *)(i * 0x10000000), sSegments[i]);
 			// one segment describes 256 MB of memory
 	}
+
+	dump_segments(sSegments);
 
 	ppc_set_page_table(physicalTable, tableSize);
 	invalidate_tlb();

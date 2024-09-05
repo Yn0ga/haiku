@@ -60,10 +60,17 @@ determine_machine(void)
 			gMachine |= MACHINE_PEGASOS;
 	}
 
+	// Old Qemu/OpenBIOS
 	if ((length = of_getprop(root, "name", buffer, sizeof(buffer) - 1))
 		!= OF_FAILED) {
 		buffer[length] = '\0';
 		if (!strcasecmp("openbiosteam,openbios", buffer))
+			gMachine |= MACHINE_QEMU;
+	}	
+	
+	// Newest Qemu/OpenBIOS doesn't define a serial-number property
+	if ((length = of_getprop(root, "serial-number", buffer, sizeof(buffer) - 1))
+	  != OF_FAILED) {
 			gMachine |= MACHINE_QEMU;
 	}
 }

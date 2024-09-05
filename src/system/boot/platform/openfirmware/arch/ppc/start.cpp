@@ -70,7 +70,7 @@ determine_machine(void)
 	
 	// Newest Qemu/OpenBIOS doesn't define a serial-number property
 	if ((length = of_getprop(root, "serial-number", buffer, sizeof(buffer) - 1))
-	  != OF_FAILED) {
+	  == OF_FAILED) {
 			gMachine |= MACHINE_QEMU;
 	}
 }

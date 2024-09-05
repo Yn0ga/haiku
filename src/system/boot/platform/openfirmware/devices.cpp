@@ -200,8 +200,9 @@ platform_add_block_devices(stage2_args *args, NodeList *devicesList)
 		// SUN's OpenBoot:
 		//strcpy(path + strlen(path), ":nolabel");
 		// Apple:
-		if (gMachine & MACHINE_MAC)
-			strcpy(path + strlen(path), ":0");
+		//if (gMachine & MACHINE_MAC)
+		//	strcpy(path + strlen(path), ":0");
+		//disk label stuff doesn't seems to be useful here, disabled for now
 
 		printf("\t%s\n", path);
 

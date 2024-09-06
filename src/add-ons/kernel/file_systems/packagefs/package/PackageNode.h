@@ -13,6 +13,7 @@
 #include <util/SinglyLinkedList.h>
 
 #include "IndexedAttributeOwner.h"
+#include "InlineReferenceable.h"
 #include "PackageNodeAttribute.h"
 #include "StringKey.h"
 
@@ -22,11 +23,14 @@ class Package;
 class PackageDirectory;
 
 
-class PackageNode : public BReferenceable, public IndexedAttributeOwner,
+class PackageNode : public IndexedAttributeOwner,
 	public SinglyLinkedListLinkImpl<PackageNode> {
 public:
 								PackageNode(Package* package, mode_t mode);
 	virtual						~PackageNode();
+
+			void				AcquireReference();
+			void				ReleaseReference();
 
 			BReference<Package>		GetPackage() const;
 									// Since PackageNode does only hold a
@@ -48,10 +52,8 @@ public:
 			uid_t				UserID() const			{ return 0; }
 			gid_t				GroupID() const			{ return 0; }
 
-			void				SetModifiedTime(const timespec& time)
-									{ fModifiedTime = time; }
-			const timespec&		ModifiedTime() const
-									{ return fModifiedTime; }
+			void				SetModifiedTime(const timespec& time);
+			timespec			ModifiedTime() const;
 
 	virtual	off_t				FileSize() const;
 
@@ -80,9 +82,10 @@ protected:
 	mutable BWeakReference<Package> fPackage;
 			PackageDirectory*	fParent;
 			String				fName;
-			mode_t				fMode;
-			timespec			fModifiedTime;
 			PackageNodeAttributeList fAttributes;
+			bigtime_t			fModifiedTime;
+			mode_t				fMode;
+			InlineReferenceable fReferenceable;
 };
 
 

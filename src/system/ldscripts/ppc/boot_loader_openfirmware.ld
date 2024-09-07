@@ -9,6 +9,8 @@ SECTIONS
 	/* text/read-only data */
 	.text :	{ *(.text .text.* .gnu.linkonce.t.*) }
 
+	__text_begin = .;
+
 	. = ALIGN(0x4);
 	__ctor_list = .;
 	.ctors : { *(.ctors) *(.init_array) }

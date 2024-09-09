@@ -6,10 +6,10 @@ SECTIONS
 {
 	. = 0x202000 + SIZEOF_HEADERS;
 
+	__text_begin = .;
+
 	/* text/read-only data */
 	.text :	{ *(.text .text.* .gnu.linkonce.t.*) }
-
-	__text_begin = .;
 
 	. = ALIGN(0x4);
 	__ctor_list = .;

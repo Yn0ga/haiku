@@ -264,7 +264,7 @@ PPCVMTranslationMapClassic::ChangeASID()
 #if KERNEL_BASE != 0x80000000
 #error fix me
 #endif
-	int vsidBase = VSIDBase();
+	register int vsidBase = VSIDBase();
 
 	isync();	// synchronize context
 	asm("mtsr	0,%0" : : "g"(vsidBase));

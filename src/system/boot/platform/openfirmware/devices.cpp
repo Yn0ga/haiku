@@ -233,6 +233,9 @@ platform_register_boot_device(Node *device)
 	disk.device_type = UNKNOWN_DEVICE;
 	disk.device.unknown.size = device->Size();
 
+	gBootVolume.SetInt32(BOOT_METHOD, BOOT_METHOD_HARD_DISK);
+        gBootVolume.SetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false);
+
 	gBootVolume.SetData(BOOT_VOLUME_DISK_IDENTIFIER, B_RAW_TYPE, &disk,
 		sizeof(disk_identifier));
 

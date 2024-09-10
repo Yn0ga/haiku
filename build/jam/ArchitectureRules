@@ -413,6 +413,7 @@ rule KernelArchitectureSetup architecture
 			# boot time is not fixed.
 			HAIKU_KERNEL_PIC_CCFLAGS = -fPIE ;
 			HAIKU_KERNEL_PIC_LINKFLAGS = -shared -fPIE ;
+			HAIKU_KERNEL_ADDON_LINKFLAGS = -T ../src/system/ldscripts/ppc/stage2.ld ;
 
 		case riscv64 :
 			# Kernel lives within any single 2 GiB address space.

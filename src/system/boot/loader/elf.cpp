@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-//#define TRACE_ELF
+#define TRACE_ELF
 #ifdef TRACE_ELF
 #	define TRACE(x) dprintf x
 #else

@@ -7,6 +7,7 @@ SEARCH_DIR("libgcc");
 PHDRS
 {
 	headers PT_PHDR PHDRS ;
+	inter PT_INTERP ;
 	text PT_LOAD FILEHDR PHDRS FLAGS(5) ;
 	data PT_LOAD ;
 	dynamic PT_DYNAMIC ;
@@ -16,7 +17,7 @@ SECTIONS
 {
 	. = 0x80000000 + SIZEOF_HEADERS;
 
-	.interp : { *(.interp) }
+	.interp : { *(.interp) } :inter :text
 	.hash : { *(.hash) }
 	.dynsym : { *(.dynsym) }
 	.dynstr : { *(.dynstr) }
@@ -60,36 +61,45 @@ SECTIONS
 		*(.rela.sbss2 .rela.sbss2.* .rela.gnu.linkonce.sb2.*)
 		*(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
 	}
-	.init : { *(.init) } :text
+	.init : { *(.init) } =0x60000000
+	.plt : { *(.plt) }
+
 
 	/* text/read-only data */
 	.text :	{
 		*(.text .stub .text.* .gnu.linkonce.t.*)
-	} :text
+	} :text =0x90909090
 
 	.rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*) }
-	.rodata1 : { *(.rodata1) }
-	.sdata2 : { *(.sdata2 .sdata2.* .gnu.linkonce.s2.*) }
-	.sbss2 : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) }
+
+	. = ALIGN(0x8);
+	altcodepatch_begin = .;
+	.altcodepatch : { *(.altcodepatch) }
+	altcodepatch_end = .;
 
 	/* writable data  */
 	/* align to the same offset in the next page (for performance reasons
 	   (not that it really matters in the kernel)) */
-	. = ALIGN(0x1000) + 0x1000 + (. & (0x1000 - 1));
-
-	__ctor_list = .;
-	.ctors : { *(.ctors) }
-	__ctor_end = .;
-
-	.dynamic : { *(.dynamic) } :data :dynamic
+	. = ALIGN(0x1000) ;
 
 	__data_start = .;
 	.data : { *(.data .gnu.linkonce.d.*) } :data
 
-	.got : { *(.got.plt) *(.got) }
-	
-	.sdata : { *(.sdata .sdata.* .gnu.linkonce.s.*) }
+	_haiku_revision : { *(_haiku_revision) }
 
+	. = ALIGN(0x4);	
+
+	__ctor_list = .;
+	.ctors : { *(.ctors) }
+	__ctor_end = .;
+	__dtor_list = .;
+        .dtors : { *(.dtors) }
+        __dtor_end = .;
+        .got : { *(.got.plt) *(.got) }
+	.dynamic : { *(.dynamic) } :dynamic :data
+
+	/* uninitialized data (in same segment as writable data) */
+	. = ALIGN(0x8);
 	/* uninitialized data (in same segment as writable data) */
 	__bss_start = .;
 	.sbss : { *(.sbss .sbss.* .gnu.linkonce.sb.*) }
@@ -97,6 +107,9 @@ SECTIONS
 		*(.bss .bss.* .gnu.linkonce.b.*)
 		. = ALIGN(0x1000);
 	} :data
+
+	/* make sure to end on a page boundary */
+	. = ALIGN(0x1000);
 
 	_end = . ;
 

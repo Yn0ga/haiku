@@ -12,7 +12,7 @@ PHDRS
 ENTRY(_start)
 SECTIONS
 {
-	. = 0x81000000 + SIZEOF_HEADERS;
+	. = 0x8e000000 + SIZEOF_HEADERS;
 
 	/* text/read-only data */
 	.text :	{ *(.text .gnu.linkonce.t.*) } :text

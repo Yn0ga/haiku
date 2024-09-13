@@ -402,7 +402,7 @@ Volume::Mount(const char* parameterString)
 		= new ::RootDirectory(kRootDirectoryID, st.st_mtim);
 	if (fRootDirectory == NULL)
 		RETURN_ERROR(B_NO_MEMORY);
-	fRootDirectory->Init(NULL, volumeNameString);
+	fRootDirectory->Init(volumeNameString);
 	fNodes.Insert(fRootDirectory);
 	fRootDirectory->AcquireReference();
 		// one reference for the table
@@ -568,6 +568,7 @@ Volume::IOCtl(Node* node, uint32 operation, void* buffer, size_t size)
 void
 Volume::AddNodeListener(NodeListener* listener, Node* node)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	ASSERT(!listener->IsListening());
 
 	listener->StartedListening(node);
@@ -582,6 +583,7 @@ Volume::AddNodeListener(NodeListener* listener, Node* node)
 void
 Volume::RemoveNodeListener(NodeListener* listener)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	ASSERT(listener->IsListening());
 
 	Node* node = listener->ListenedNode();
@@ -604,6 +606,7 @@ Volume::RemoveNodeListener(NodeListener* listener)
 void
 Volume::AddQuery(Query* query)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	fQueries.Add(query);
 }
 
@@ -611,6 +614,7 @@ Volume::AddQuery(Query* query)
 void
 Volume::RemoveQuery(Query* query)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	fQueries.Remove(query);
 }
 
@@ -1406,7 +1410,7 @@ Volume::_CreateUnpackingNode(mode_t mode, Directory* parent, const String& name,
 	Node* node = unpackingNode->GetNode();
 	BReference<Node> nodeReference(node, true);
 
-	status_t error = node->Init(parent, name);
+	status_t error = node->Init(name);
 	if (error != B_OK)
 		RETURN_ERROR(error);
 
@@ -1707,7 +1711,7 @@ Volume::_CreateShineThroughDirectory(Directory* parent, const char* name,
 	if (!nameString.SetTo(name))
 		RETURN_ERROR(B_NO_MEMORY);
 
-	status_t error = directory->Init(parent, nameString);
+	status_t error = directory->Init(nameString);
 	if (error != B_OK)
 		RETURN_ERROR(error);
 
@@ -1771,6 +1775,8 @@ Volume::_CreateShineThroughDirectories(const char* shineThroughSetting)
 status_t
 Volume::_PublishShineThroughDirectories()
 {
+	NodeWriteLocker rootDirectoryWriteLocker(fRootDirectory);
+
 	// Iterate through the root directory children and bind the shine-through
 	// directories to the respective mount point subdirectories.
 	Node* nextNode;
@@ -1851,7 +1857,6 @@ Volume::_AddPackageLinksDirectory()
 	NodeWriteLocker rootDirectoryWriteLocker(fRootDirectory);
 	NodeWriteLocker packageLinksDirectoryWriteLocker(packageLinksDirectory);
 
-	packageLinksDirectory->SetParent(fRootDirectory);
 	fRootDirectory->AddChild(packageLinksDirectory);
 
 	_AddPackageLinksNode(packageLinksDirectory);
@@ -1875,7 +1880,6 @@ Volume::_RemovePackageLinksDirectory()
 	if (packageLinksDirectory->Parent() == fRootDirectory) {
 		packageLinksDirectory->SetListener(NULL);
 		fRootDirectory->RemoveChild(packageLinksDirectory);
-		packageLinksDirectory->SetParent(NULL);
 	}
 }
 

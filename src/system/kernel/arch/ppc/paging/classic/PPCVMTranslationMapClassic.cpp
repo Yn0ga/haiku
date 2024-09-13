@@ -297,7 +297,7 @@ PPCVMTranslationMapClassic::LookupPageTableEntry(addr_t virtualAddress)
 	for (int i = 0; i < 8; i++) {
 		page_table_entry *entry = &group->entry[i];
 
-		if (entry->virtual_segment_id == virtualSegmentID
+		if ((entry->virtual_segment_id & 0xf) == virtualSegmentID
 			&& entry->secondary_hash == false
 			&& entry->abbr_page_index == ((virtualAddress >> 22) & 0x3f))
 			return entry;
@@ -311,7 +311,7 @@ PPCVMTranslationMapClassic::LookupPageTableEntry(addr_t virtualAddress)
 	for (int i = 0; i < 8; i++) {
 		page_table_entry *entry = &group->entry[i];
 
-		if (entry->virtual_segment_id == virtualSegmentID
+		if ((entry->virtual_segment_id & 0xf) == virtualSegmentID
 			&& entry->secondary_hash == true
 			&& entry->abbr_page_index == ((virtualAddress >> 22) & 0x3f))
 			return entry;

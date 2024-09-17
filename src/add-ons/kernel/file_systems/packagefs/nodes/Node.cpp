@@ -13,7 +13,7 @@
 #include "EmptyAttributeDirectoryCookie.h"
 
 
-DEFINE_REFERENCEABLE_ACQUIRE_RELEASE(Node, fReferenceable);
+DEFINE_INLINE_REFERENCEABLE_METHODS(Node, fReferenceable);
 
 
 Node::Node(ino_t id)
@@ -34,12 +34,25 @@ Node::~Node()
 
 
 status_t
-Node::Init(Directory* parent, const String& name)
+Node::Init(const String& name)
 {
-	fParent = parent;
 	fName = name;
 	fFlags = 0;
 	return B_OK;
+}
+
+
+void
+Node::SetID(ino_t id)
+{
+	fID = id;
+}
+
+
+void
+Node::_SetParent(Directory* parent)
+{
+	fParent = parent;
 }
 
 
@@ -55,20 +68,6 @@ void
 Node::VFSUninit()
 {
 	fFlags &= ~(uint32)NODE_FLAG_KNOWN_TO_VFS;
-}
-
-
-void
-Node::SetID(ino_t id)
-{
-	fID = id;
-}
-
-
-void
-Node::SetParent(Directory* parent)
-{
-	fParent = parent;
 }
 
 

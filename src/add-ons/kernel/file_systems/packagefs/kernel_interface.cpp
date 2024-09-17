@@ -67,16 +67,18 @@ packagefs_mount(fs_volume* fsVolume, const char* device, uint32 flags,
 	Volume* volume = new(std::nothrow) Volume(fsVolume);
 	if (volume == NULL)
 		RETURN_ERROR(B_NO_MEMORY);
-	ObjectDeleter<Volume> volumeDeleter(volume);
+	VolumeWriteLocker volumeWriteLocker(volume);
 
 	// Initialize the fs_volume now already, so it is mostly usable in during
 	// mounting.
-	fsVolume->private_volume = volumeDeleter.Detach();
+	fsVolume->private_volume = volume;
 	fsVolume->ops = &gPackageFSVolumeOps;
 
 	status_t error = volume->Mount(parameters);
-	if (error != B_OK)
+	if (error != B_OK) {
+		delete volume;
 		return error;
+	}
 
 	// set return values
 	*_rootID = volume->RootDirectory()->ID();
@@ -92,6 +94,7 @@ packagefs_unmount(fs_volume* fsVolume)
 
 	FUNCTION("volume: %p\n", volume);
 
+	volume->WriteLock();
 	volume->Unmount();
 	delete volume;
 

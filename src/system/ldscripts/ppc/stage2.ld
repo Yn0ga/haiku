@@ -14,6 +14,11 @@ SECTIONS
 {
 	. = 0x8e000000 + SIZEOF_HEADERS;
 
+
+        .dynsym : { *(.dynsym) }
+        .dynstr : { *(.dynstr) }
+        .plt : { *(.plt) }
+
 	/* text/read-only data */
 	.text :	{ *(.text .gnu.linkonce.t.*) } :text
 
@@ -22,6 +27,9 @@ SECTIONS
 	__ctor_end = .;
 
 	.rodata : { *(.rodata) }
+
+	.got : { *(.got.plt) *(.got) }
+	.dynamic : { *(.dynamic) } :dynamic :data
 
 	/* writable data  */
 	. = ALIGN(0x1000);

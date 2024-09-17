@@ -20,6 +20,7 @@ static constexpr uint64_t kPteTypeL012Table = 0x3;
 static constexpr uint64_t kPteTypeL12Block = 0x1;
 static constexpr uint64_t kPteTypeL3Page = 0x3;
 
+static constexpr uint64_t kAttrSWDIRTY = (1UL << 56);
 static constexpr uint64_t kAttrSWDBM = (1UL << 55);
 static constexpr uint64_t kAttrUXN = (1UL << 54);
 static constexpr uint64_t kAttrPXN = (1UL << 53);
@@ -57,13 +58,11 @@ public:
 
 	virtual	status_t			UnmapPage(VMArea* area, addr_t address,
 									bool updatePageQueue);
-/*
 	virtual	void				UnmapPages(VMArea* area, addr_t base,
 									size_t size, bool updatePageQueue);
 	virtual	void				UnmapArea(VMArea* area,
 									bool deletingAddressSpace,
 									bool ignoreTopCachePageFlags);
-*/
 
 	virtual	status_t			Query(addr_t virtualAddress,
 									phys_addr_t* _physicalAddress,
@@ -122,8 +121,8 @@ private:
 	template<typename UpdatePte>
 	void ProcessRange(phys_addr_t ptPa, int level, addr_t va, size_t size,
 		vm_page_reservation* reservation, UpdatePte &&updatePte);
-	uint64_t AttemptPteBreakBeforeMake(uint64_t* ptePtr, uint64_t oldPte, addr_t va);
-	void FlushVAFromTLBByASID(addr_t va);
+	bool AttemptPteBreakBeforeMake(uint64_t* ptePtr, uint64_t oldPte, addr_t va);
+	bool FlushVAIfAccessed(uint64_t pte, addr_t va);
 };
 
 

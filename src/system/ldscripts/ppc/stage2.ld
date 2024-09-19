@@ -12,34 +12,46 @@ PHDRS
 ENTRY(_start)
 SECTIONS
 {
-	. = 0x8e000000 + SIZEOF_HEADERS;
-
+	. = 0x80000000 + SIZEOF_HEADERS;
 
         .dynsym : { *(.dynsym) }
         .dynstr : { *(.dynstr) }
         .plt : { *(.plt) }
+        .gnu.version : { *(.gnu.version) }
+        .gnu.version_d : { *(.gnu.version_d) }
+        .gnu.version_r : { *(.gnu.version_r) }
 
-	/* text/read-only data */
-	.text :	{ *(.text .gnu.linkonce.t.*) } :text
+        /* text/read-only data */
+        .text : {
+                *(.text .stub .text.* .gnu.linkonce.t.*)
+        } :text =0x90909090
 
-	__ctor_list = .;
-	.ctors : { *(.ctors) }
-	__ctor_end = .;
-
-	.rodata : { *(.rodata) }
-
-	.got : { *(.got.plt) *(.got) }
-	.dynamic : { *(.dynamic) } :dynamic :data
+        .rodata : { *(.rodata .rodata.* .gnu.linkonce.r.*) }
 
 	/* writable data  */
 	. = ALIGN(0x1000);
 	__data_start = .;
 	.data : { *(.data .gnu.linkonce.d.*) } :data
 
+	 . = ALIGN(0x4);
+
+	__ctor_list = .;
+	.ctors : { *(.ctors) }
+	__ctor_end = .;
+        __dtor_list = .;
+        .dtors : { *(.dtors) }
+        __dtor_end = .;
+	.got : { *(.got.plt) *(.got) }
+	.dynamic : { *(.dynamic) } :dynamic :data
+
+	. = ALIGN(0x8);
+
 	/* uninitialized data (in same segment as writable data) */
 	__bss_start = .;
-	.bss : { *(.bss) } :data
-
+        .sbss : { *(.sbss .sbss.* .gnu.linkonce.sb.*) }
+        .bss : {
+                *(.bss .bss.* .gnu.linkonce.b.*)
+        } :data
 	/* make sure to end on a page boundary */
 	. = ALIGN(0x1000);
 

@@ -101,6 +101,7 @@ struct segment_descriptor {
 enum pte_protection {
 	PTE_READ_ONLY	= 3,
 	PTE_READ_WRITE	= 2,
+	PTE_EXECUTE     = 0x200,  /* pseudo bit in attrs; page is exec */
 };
 
 struct page_table_entry {

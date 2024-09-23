@@ -98,7 +98,7 @@
 #include "GenericVMPhysicalPageMapper.h"
 
 
-//#define TRACE_PPC_VM_TRANSLATION_MAP_CLASSIC
+#define TRACE_PPC_VM_TRANSLATION_MAP_CLASSIC
 #ifdef TRACE_PPC_VM_TRANSLATION_MAP_CLASSIC
 #	define TRACE(x...) dprintf(x)
 #else
@@ -115,7 +115,6 @@ static spinlock sVSIDBaseBitmapLock;
 
 #define VSID_BASE_SHIFT 3
 #define VADDR_TO_VSID(vsidBase, vaddr) (vsidBase + ((vaddr) >> 28))
-
 
 // #pragma mark -
 
@@ -186,7 +185,7 @@ PPCVMTranslationMapClassic::Init(bool kernel)
 		// latter one for mapping the kernel address space (0x80000000...), the
 		// former one for the lower addresses required by the Open Firmware
 		// services.
-		fVSIDBase = 0;
+		fVSIDBase = 0 + 0x400;
 		sVSIDBaseBitmap[0] |= 0x3;
 	} else {
 		int i = 0;
@@ -297,7 +296,7 @@ PPCVMTranslationMapClassic::LookupPageTableEntry(addr_t virtualAddress)
 	for (int i = 0; i < 8; i++) {
 		page_table_entry *entry = &group->entry[i];
 
-		if ((entry->virtual_segment_id & 0xf) == virtualSegmentID
+		if ((entry->virtual_segment_id) == virtualSegmentID
 			&& entry->secondary_hash == false
 			&& entry->abbr_page_index == ((virtualAddress >> 22) & 0x3f))
 			return entry;
@@ -311,7 +310,7 @@ PPCVMTranslationMapClassic::LookupPageTableEntry(addr_t virtualAddress)
 	for (int i = 0; i < 8; i++) {
 		page_table_entry *entry = &group->entry[i];
 
-		if ((entry->virtual_segment_id & 0xf) == virtualSegmentID
+		if ((entry->virtual_segment_id) == virtualSegmentID
 			&& entry->secondary_hash == true
 			&& entry->abbr_page_index == ((virtualAddress >> 22) & 0x3f))
 			return entry;
@@ -351,7 +350,7 @@ PPCVMTranslationMapClassic::Map(addr_t virtualAddress,
 	phys_addr_t physicalAddress, uint32 attributes,
 	uint32 memoryType, vm_page_reservation* reservation)
 {
-	TRACE("map_tmap: entry pa 0x%lx va 0x%lx\n", pa, va);
+	TRACE("map_tmap: entry pa 0x%lx va 0x%lx\n", physicalAddress, virtualAddress);
 
 	// lookup the vsid based off the va
 	uint32 virtualSegmentID = VADDR_TO_VSID(fVSIDBase, virtualAddress);
@@ -749,107 +748,90 @@ void
 PPCVMTranslationMapClassic::UnmapPages(VMArea* area, addr_t base, size_t size,
 	bool updatePageQueue)
 {
-	panic("%s: UNIMPLEMENTED", __FUNCTION__);
-#if 0//X86
 	if (size == 0)
 		return;
 
-	addr_t start = base;
 	addr_t end = base + size - 1;
 
-	TRACE("PPCVMTranslationMapClassic::UnmapPages(%p, %#" B_PRIxADDR ", %#"
-		B_PRIxADDR ")\n", area, start, end);
-
-	page_directory_entry* pd = fPagingStructures->pgdir_virt;
+	TRACE("PPCVMTranslationMapClassic::UnmapPages(0x%" B_PRIxADDR "(%s), 0x%"
+		B_PRIxADDR ", 0x%" B_PRIxSIZE ", %d)\n", (addr_t)area,
+		area->name, base, size, updatePageQueue);
 
 	VMAreaMappings queue;
-
 	RecursiveLocker locker(fLock);
 
-	do {
-		int index = VADDR_TO_PDENT(start);
-		if ((pd[index] & PPC_PDE_PRESENT) == 0) {
-			// no page table here, move the start up to access the next page
-			// table
-			start = ROUNDUP(start + 1, kPageTableAlignment);
-			continue;
-		}
+	Thread* thread = thread_get_current_thread();
+	ThreadCPUPinner pinner(thread);
+
+	for (addr_t start = base; start < end; start += B_PAGE_SIZE) {
 
 		Thread* thread = thread_get_current_thread();
 		ThreadCPUPinner pinner(thread);
 
-		page_table_entry* pt = (page_table_entry*)fPageMapper->GetPageTableAt(
-			pd[index] & PPC_PDE_ADDRESS_MASK);
+		page_table_entry *oldEntry = LookupPageTableEntry(start);
+		if (oldEntry == NULL)
+			continue;
 
-		for (index = VADDR_TO_PTENT(start); (index < 1024) && (start < end);
-				index++, start += B_PAGE_SIZE) {
-			page_table_entry oldEntry
-				= PPCPagingMethodClassic::ClearPageTableEntry(&pt[index]);
-			if ((oldEntry & PPC_PTE_PRESENT) == 0)
-				continue;
+		fMapCount--;
 
-			fMapCount--;
-
-			if ((oldEntry & PPC_PTE_ACCESSED) != 0) {
-				// Note, that we only need to invalidate the address, if the
-				// accessed flags was set, since only then the entry could have
-				// been in any TLB.
-				InvalidatePage(start);
-			}
-
-			if (area->cache_type != CACHE_TYPE_DEVICE) {
-				// get the page
-				vm_page* page = vm_lookup_page(
-					(oldEntry & PPC_PTE_ADDRESS_MASK) / B_PAGE_SIZE);
-				ASSERT(page != NULL);
-
-				DEBUG_PAGE_ACCESS_START(page);
-
-				// transfer the accessed/dirty flags to the page
-				if ((oldEntry & PPC_PTE_ACCESSED) != 0)
-					page->accessed = true;
-				if ((oldEntry & PPC_PTE_DIRTY) != 0)
-					page->modified = true;
-
-				// remove the mapping object/decrement the wired_count of the
-				// page
-				if (area->wiring == B_NO_LOCK) {
-					vm_page_mapping* mapping = NULL;
-					vm_page_mappings::Iterator iterator
-						= page->mappings.GetIterator();
-					while ((mapping = iterator.Next()) != NULL) {
-						if (mapping->area == area)
-							break;
-					}
-
-					ASSERT(mapping != NULL);
-
-					area->mappings.Remove(mapping);
-					page->mappings.Remove(mapping);
-					queue.Add(mapping);
-				} else
-					page->DecrementWiredCount();
-
-				if (!page->IsMapped()) {
-					atomic_add(&gMappedPagesCount, -1);
-
-					if (updatePageQueue) {
-						if (page->Cache()->temporary)
-							vm_page_set_state(page, PAGE_STATE_INACTIVE);
-						else if (page->modified)
-							vm_page_set_state(page, PAGE_STATE_MODIFIED);
-						else
-							vm_page_set_state(page, PAGE_STATE_CACHED);
-					}
-				}
-
-				DEBUG_PAGE_ACCESS_END(page);
-			}
+		if ((oldEntry->referenced) != 0) {
+			// Note, that we only need to invalidate the address, if the
+			// accessed flags was set, since only then the entry could have
+			// been in any TLB.
+			InvalidatePage(start);
 		}
 
+		if (area->cache_type != CACHE_TYPE_DEVICE) {
+			// get the page
+			vm_page* page = vm_lookup_page(start);
+			ASSERT(page != NULL);
+
+			DEBUG_PAGE_ACCESS_START(page);
+
+			// transfer the accessed/dirty flags to the page
+			if ((oldEntry->referenced) != 0)
+				page->accessed = true;
+			if ((oldEntry->changed) != 0)
+				page->modified = true;
+
+			// remove the mapping object/decrement the wired_count of the
+			// page
+			if (area->wiring == B_NO_LOCK) {
+				vm_page_mapping* mapping = NULL;
+				vm_page_mappings::Iterator iterator
+					= page->mappings.GetIterator();
+				while ((mapping = iterator.Next()) != NULL) {
+					if (mapping->area == area)
+						break;
+				}
+
+				ASSERT(mapping != NULL);
+
+				area->mappings.Remove(mapping);
+				page->mappings.Remove(mapping);
+				queue.Add(mapping);
+			} else
+				page->DecrementWiredCount();
+
+			if (!page->IsMapped()) {
+				atomic_add(&gMappedPagesCount, -1);
+
+				if (updatePageQueue) {
+					if (page->Cache()->temporary)
+						vm_page_set_state(page, PAGE_STATE_INACTIVE);
+					else if (page->modified)
+						vm_page_set_state(page, PAGE_STATE_MODIFIED);
+					else
+						vm_page_set_state(page, PAGE_STATE_CACHED);
+				}
+			}
+
+			DEBUG_PAGE_ACCESS_END(page);
+		}
+		// flush explicitly, since we directly use the lock
 		Flush();
-			// flush explicitly, since we directly use the lock
-	} while (start != 0 && start < end);
+	
+	}
 
 	// TODO: As in UnmapPage() we can lose page dirty flags here. ATM it's not
 	// really critical here, as in all cases this method is used, the unmapped
@@ -864,7 +846,6 @@ PPCVMTranslationMapClassic::UnmapPages(VMArea* area, addr_t base, size_t size,
 		| (isKernelSpace ? CACHE_DONT_LOCK_KERNEL_SPACE : 0);
 	while (vm_page_mapping* mapping = queue.RemoveHead())
 		vm_free_page_mapping(mapping->page->physical_page_number, mapping, freeFlags);
-#endif
 }
 
 
@@ -872,8 +853,11 @@ void
 PPCVMTranslationMapClassic::UnmapArea(VMArea* area, bool deletingAddressSpace,
 	bool ignoreTopCachePageFlags)
 {
-	panic("%s: UNIMPLEMENTED", __FUNCTION__);
-#if 0//X86
+	TRACE("PPCVMTranslationMapClassic::UnmapArea(0x%" B_PRIxADDR "(%s), 0x%"
+		B_PRIxADDR ", 0x%" B_PRIxSIZE ", %d, %d)\n", (addr_t)area,
+		area->name, area->Base(), area->Size(), deletingAddressSpace,
+		ignoreTopCachePageFlags);
+
 	if (area->cache_type == CACHE_TYPE_DEVICE || area->wiring != B_NO_LOCK) {
 		PPCVMTranslationMapClassic::UnmapPages(area, area->Base(), area->Size(),
 			true);
@@ -882,9 +866,8 @@ PPCVMTranslationMapClassic::UnmapArea(VMArea* area, bool deletingAddressSpace,
 
 	bool unmapPages = !deletingAddressSpace || !ignoreTopCachePageFlags;
 
-	page_directory_entry* pd = fPagingStructures->pgdir_virt;
-
 	RecursiveLocker locker(fLock);
+	ThreadCPUPinner pinner(thread_get_current_thread());
 
 	VMAreaMappings mappings;
 	mappings.MoveFrom(&area->mappings);
@@ -906,25 +889,8 @@ PPCVMTranslationMapClassic::UnmapArea(VMArea* area, bool deletingAddressSpace,
 			addr_t address = area->Base()
 				+ ((page->cache_offset * B_PAGE_SIZE) - area->cache_offset);
 
-			int index = VADDR_TO_PDENT(address);
-			if ((pd[index] & PPC_PDE_PRESENT) == 0) {
-				panic("page %p has mapping for area %p (%#" B_PRIxADDR "), but "
-					"has no page dir entry", page, area, address);
-				continue;
-			}
-
-			ThreadCPUPinner pinner(thread_get_current_thread());
-
-			page_table_entry* pt
-				= (page_table_entry*)fPageMapper->GetPageTableAt(
-					pd[index] & PPC_PDE_ADDRESS_MASK);
-			page_table_entry oldEntry
-				= PPCPagingMethodClassic::ClearPageTableEntry(
-					&pt[VADDR_TO_PTENT(address)]);
-
-			pinner.Unlock();
-
-			if ((oldEntry & PPC_PTE_PRESENT) == 0) {
+			page_table_entry *oldEntry = LookupPageTableEntry(address);
+			if (oldEntry == NULL) {
 				panic("page %p has mapping for area %p (%#" B_PRIxADDR "), but "
 					"has no page table entry", page, area, address);
 				continue;
@@ -932,14 +898,14 @@ PPCVMTranslationMapClassic::UnmapArea(VMArea* area, bool deletingAddressSpace,
 
 			// transfer the accessed/dirty flags to the page and invalidate
 			// the mapping, if necessary
-			if ((oldEntry & PPC_PTE_ACCESSED) != 0) {
+			if ((oldEntry->referenced) != 0) {
 				page->accessed = true;
 
 				if (!deletingAddressSpace)
 					InvalidatePage(address);
 			}
 
-			if ((oldEntry & PPC_PTE_DIRTY) != 0)
+			if ((oldEntry->changed) != 0)
 				page->modified = true;
 
 			if (pageFullyUnmapped) {
@@ -969,7 +935,6 @@ PPCVMTranslationMapClassic::UnmapArea(VMArea* area, bool deletingAddressSpace,
 		| (isKernelSpace ? CACHE_DONT_LOCK_KERNEL_SPACE : 0);
 	while (vm_page_mapping* mapping = mappings.RemoveHead())
 		vm_free_page_mapping(mapping->page->physical_page_number, mapping, freeFlags);
-#endif
 }
 
 
@@ -1089,80 +1054,62 @@ status_t
 PPCVMTranslationMapClassic::Protect(addr_t start, addr_t end, uint32 attributes,
 	uint32 memoryType)
 {
-	// XXX finish
-	return B_ERROR;
-#if 0//X86
 	start = ROUNDDOWN(start, B_PAGE_SIZE);
 	if (start >= end)
 		return B_OK;
 
-	TRACE("protect_tmap: pages 0x%lx to 0x%lx, attributes %lx\n", start, end,
-		attributes);
+	TRACE("PPCVMTranslationMap::Protect(0x%" B_PRIxADDR ", 0x%"
+		B_PRIxADDR ", attributes 0x%)\n", start, end, attributes);
 
-	// compute protection flags
-	uint32 newProtectionFlags = 0;
-	if ((attributes & B_USER_PROTECTION) != 0) {
-		newProtectionFlags = PPC_PTE_USER;
-		if ((attributes & B_WRITE_AREA) != 0)
-			newProtectionFlags |= PPC_PTE_WRITABLE;
-	} else if ((attributes & B_KERNEL_WRITE_AREA) != 0)
-		newProtectionFlags = PPC_PTE_WRITABLE;
 
-	page_directory_entry *pd = fPagingStructures->pgdir_virt;
+	uint32 protection = 0;
+	// ToDo: check this
+	// all kernel mappings are R/W to supervisor code
+	if (attributes & (B_READ_AREA | B_WRITE_AREA))
+		protection = (attributes & B_WRITE_AREA) ? PTE_READ_WRITE : PTE_READ_ONLY;
 
-	do {
-		int index = VADDR_TO_PDENT(start);
-		if ((pd[index] & PPC_PDE_PRESENT) == 0) {
-			// no page table here, move the start up to access the next page
-			// table
-			start = ROUNDUP(start + 1, kPageTableAlignment);
+	Thread* thread = thread_get_current_thread();
+	ThreadCPUPinner pinner(thread);
+
+	for (addr_t page = start; page < end; page += B_PAGE_SIZE) {
+
+		page_table_entry* entry = LookupPageTableEntry(page);
+		if (entry == NULL) {
+			TRACE("attempt to protect not mapped page: 0x%"
+				B_PRIxADDR "\n", page);
 			continue;
 		}
 
-		Thread* thread = thread_get_current_thread();
-		ThreadCPUPinner pinner(thread);
-
-		page_table_entry* pt = (page_table_entry*)fPageMapper->GetPageTableAt(
-			pd[index] & PPC_PDE_ADDRESS_MASK);
-
-		for (index = VADDR_TO_PTENT(start); index < 1024 && start < end;
-				index++, start += B_PAGE_SIZE) {
-			page_table_entry entry = pt[index];
-			if ((entry & PPC_PTE_PRESENT) == 0) {
-				// page mapping not valid
-				continue;
+		// set the new protection flags -- we want to do that atomically,
+		// without changing the accessed or dirty flag
+		page_table_entry newEntry;
+		while (true) {
+			newEntry = *entry;
+			if ((attributes & B_USER_PROTECTION) != 0) {
+				//newEntry.isUser = true;
+				newEntry.page_protection |= (attributes & B_READ_AREA) ? PTE_READ_ONLY : 0;
+				newEntry.page_protection |= (attributes & B_WRITE_AREA) ? PTE_READ_WRITE : 0;
+				newEntry.page_protection |= (attributes & B_EXECUTE_AREA) ? PTE_EXECUTE : 0;
+			} else {
+				//newEntry.isUser = false;
+				newEntry.page_protection |= (attributes & B_KERNEL_READ_AREA) ? PTE_READ_ONLY : 0;
+				newEntry.page_protection |= (attributes & B_KERNEL_WRITE_AREA) ? PTE_READ_WRITE : 0;
+				newEntry.page_protection |= (attributes & B_KERNEL_EXECUTE_AREA) ? PTE_EXECUTE : 0;
 			}
-
-			TRACE("protect_tmap: protect page 0x%lx\n", start);
-
-			// set the new protection flags -- we want to do that atomically,
-			// without changing the accessed or dirty flag
-			page_table_entry oldEntry;
-			while (true) {
-				oldEntry = PPCPagingMethodClassic::TestAndSetPageTableEntry(
-					&pt[index],
-					(entry & ~(PPC_PTE_PROTECTION_MASK
-							| PPC_PTE_MEMORY_TYPE_MASK))
-						| newProtectionFlags
-						| PPCPagingMethodClassic::MemoryTypeToPageTableEntryFlags(
-							memoryType),
-					entry);
-				if (oldEntry == entry)
-					break;
-				entry = oldEntry;
-			}
-
-			if ((oldEntry & PPC_PTE_ACCESSED) != 0) {
-				// Note, that we only need to invalidate the address, if the
-				// accessed flag was set, since only then the entry could have
-				// been in any TLB.
-				InvalidatePage(start);
-			}
+			if (entry->page_protection == newEntry.page_protection)
+				break;
+			*entry = newEntry;
 		}
-	} while (start != 0 && start < end);
+
+		if ((entry->referenced ) != 0) {
+			// Note, that we only need to invalidate the address, if the
+			// accessed flag was set, since only then the entry could have
+			// been in any TLB.
+			InvalidatePage(page);
+		}
+	}
 
 	return B_OK;
-#endif
 }
 
 
@@ -1355,7 +1302,6 @@ PPCVMTranslationMapClassic::ClearAccessedAndModified(VMArea* area,
 	return false;
 #endif
 }
-
 
 PPCPagingStructures*
 PPCVMTranslationMapClassic::PagingStructures() const

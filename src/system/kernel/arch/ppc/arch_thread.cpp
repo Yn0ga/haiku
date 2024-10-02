@@ -22,13 +22,19 @@
 
 #include <string.h>
 
+#define TRACE_ARCH_THREAD
+#ifdef TRACE_ARCH_THREAD
+#	define TRACE(x...) dprintf(x)
+#else
+#	define TRACE(x...) ;
+#endif
+
 // Valid initial arch_thread state. We just memcpy() it when initializing
 // a new thread structure.
 static struct arch_thread sInitialState;
 
 // Helper function for thread creation, defined in arch_asm.S.
 extern "C" void ppc_kernel_thread_root();
-
 
 void
 ppc_push_iframe(struct iframe_stack *stack, struct iframe *frame)
@@ -118,21 +124,14 @@ void
 arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 	void (*function)(void*), const void* data)
 {
-#if 0
-	addr_t *kstack = (addr_t *)t->kernel_stack_base;
-	addr_t *kstackTop = (addr_t *)t->kernel_stack_top;
+	addr_t *kstack = (addr_t *)_stack;
+	addr_t *kstackTop = (addr_t *)_stackTop;
+
+	TRACE(("arch_thread_init_kthread_stack(%s): stack top %p, function %p",
+		thread->name, (const char*)kstackTop, (const char *)function));
 
 	// clear the kernel stack
-#ifdef DEBUG_KERNEL_STACKS
-#	ifdef STACK_GROWS_DOWNWARDS
-	memset((void *)((addr_t)kstack + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE), 0,
-		KERNEL_STACK_SIZE);
-#	else
-	memset(kstack, 0, KERNEL_STACK_SIZE);
-#	endif
-#else
-	memset(kstack, 0, KERNEL_STACK_SIZE);
-#endif
+	memset(kstack + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE, 0, KERNEL_STACK_SIZE);
 
 	// space for frame pointer and return address, and stack frames must be
 	// 16 byte aligned
@@ -142,29 +141,19 @@ arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 	// LR, CR, r2, r13-r31, f13-f31, as pushed by ppc_context_switch()
 	kstackTop -= 22 + 2 * 19;
 
-	// let LR point to ppc_kernel_thread_root()
-	kstackTop[0] = (addr_t)&ppc_kernel_thread_root;
-
-	// the arguments of ppc_kernel_thread_root() are the functions to call,
-	// provided in registers r13-r15
-	kstackTop[3] = (addr_t)entry_func;
-	kstackTop[4] = (addr_t)start_func;
-	kstackTop[5] = (addr_t)exit_func;
+	kstackTop[0] = (addr_t)function;
+	kstackTop[1] = (addr_t)data;
 
 	// save this stack position
-	t->arch_info.sp = (void *)kstackTop;
-
-	return B_OK;
-#else
-	panic("arch_thread_init_kthread_stack(): Implement me!");
-#endif
+	thread->arch_info.sp = kstackTop;
 }
 
 
 status_t
 arch_thread_init_tls(Thread *thread)
 {
-	// TODO: Implement!
+	thread->user_local_storage =
+		thread->user_stack_base + thread->user_stack_size;
 	return B_OK;
 }
 

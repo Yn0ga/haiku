@@ -8,6 +8,7 @@
 #include <new>
 
 #include <KernelExport.h>
+#include <cstring>
 
 #include <arch/generic/debug_uart.h>
 #include <boot/kernel_args.h>
@@ -191,10 +192,12 @@ PPCOpenFirmware::SetHardwareRTC(uint32 seconds)
 	t.tm_year += RTC_EPOCH_BASE_YEAR;
 	t.tm_mon++;
 
-	if (of_call_method(fRTC, "set-time", 6, 0, t.tm_year, t.tm_mon, t.tm_mday,
+	/*
+	   if (of_call_method(fRTC, "set-time", 6, 0, t.tm_year, t.tm_mon, t.tm_mday,
 			t.tm_hour, t.tm_min, t.tm_sec) == OF_FAILED) {
 		dprintf("PPCOpenFirmware::SetHardwareRTC(): Failed to set RTC!\n");
 	}
+	*/
 }
 
 
@@ -202,12 +205,28 @@ uint32
 PPCOpenFirmware::GetHardwareRTC()
 {
 	struct tm t;
-	if (of_call_method(fRTC, "get-time", 0, 6, &t.tm_year, &t.tm_mon,
-			&t.tm_mday, &t.tm_hour, &t.tm_min, &t.tm_sec) == OF_FAILED) {
+
+	/*
+	if (of_call_method(fRTC, "get-time", 0, 6, &fT.tm_year, &fT.tm_mon,
+			&fT.tm_mday, &fT.tm_hour, &fT.tm_min, &fT.tm_sec) == OF_FAILED) {
 		dprintf("PPCOpenFirmware::GetHardwareRTC(): Failed to get RTC!\n");
 		return 0;
 	}
-
+	*/
+	t.tm_year = 2024;
+	t.tm_mon  = 10;
+	t.tm_mday = 20;
+	t.tm_hour = 14;
+	t.tm_min  = 00;
+	t.tm_sec  = 00;
+	/*
+	t.tm_year = date[5] - RTC_EPOCH_BASE_YEAR;
+	t.tm_mon  = date[4];
+	t.tm_mday = date[3];
+	t.tm_hour = date[2];
+	t.tm_min  = date[1];
+	t.tm_sec  = date[0];
+	*/
 	t.tm_year -= RTC_EPOCH_BASE_YEAR;
 	t.tm_mon--;
 

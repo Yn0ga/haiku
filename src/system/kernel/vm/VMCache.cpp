@@ -1083,8 +1083,6 @@ VMCache::SetMinimalCommitment(off_t commitment, int priority)
 {
 	TRACE(("VMCache::SetMinimalCommitment(cache %p, commitment %" B_PRIdOFF
 		")\n", this, commitment));
-	AssertLocked();
-
 	T(SetMinimalCommitment(this, commitment));
 
 	status_t status = B_OK;
@@ -1092,8 +1090,11 @@ VMCache::SetMinimalCommitment(off_t commitment, int priority)
 	// If we don't have enough committed space to cover through to the new end
 	// of the area...
 	if (committed_size < commitment) {
-		// ToDo: should we check if the cache's virtual size is large
-		//	enough for a commitment of that size?
+#if KDEBUG
+		const off_t size = ROUNDUP(virtual_end - virtual_base, B_PAGE_SIZE);
+		ASSERT_PRINT(commitment <= size, "cache %p, commitment %" B_PRIdOFF ", size %" B_PRIdOFF,
+			this, commitment, size);
+#endif
 
 		// try to commit more memory
 		status = Commit(commitment, priority);
@@ -1157,13 +1158,9 @@ VMCache::Resize(off_t newSize, int priority)
 {
 	TRACE(("VMCache::Resize(cache %p, newSize %" B_PRIdOFF ") old size %"
 		B_PRIdOFF "\n", this, newSize, this->virtual_end));
-	this->AssertLocked();
-
 	T(Resize(this, newSize));
 
-	status_t status = Commit(newSize - virtual_base, priority);
-	if (status != B_OK)
-		return status;
+	AssertLocked();
 
 	page_num_t oldPageCount = (page_num_t)((virtual_end + B_PAGE_SIZE - 1)
 		>> PAGE_SHIFT);
@@ -1176,6 +1173,10 @@ VMCache::Resize(off_t newSize, int priority)
 		while (_FreePageRange(pages.GetIterator(newPageCount, true, true)))
 			;
 	}
+
+	status_t status = Commit(newSize - virtual_base, priority);
+	if (status != B_OK)
+		return status;
 
 	virtual_end = newSize;
 	return B_OK;
@@ -1300,8 +1301,8 @@ VMCache::FlushAndRemoveAllPages()
 status_t
 VMCache::Commit(off_t size, int priority)
 {
-	committed_size = size;
-	return B_OK;
+	ASSERT_UNREACHABLE();
+	return B_NOT_SUPPORTED;
 }
 
 

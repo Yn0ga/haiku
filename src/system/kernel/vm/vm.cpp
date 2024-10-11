@@ -264,7 +264,7 @@ struct cache_info {
 	addr_t		committed;
 };
 
-static const int kCacheInfoTableCount = 100 * 1024;
+static const uint32 kCacheInfoTableCount = 100 * 1024;
 static cache_info* sCacheInfoTable;
 
 #endif	// DEBUG_CACHE_LIST
@@ -546,8 +546,11 @@ allocate_area_page_protections(VMArea* area)
 	// init the page protections for all pages to that of the area
 	uint32 areaProtection = area->protection
 		& (B_READ_AREA | B_WRITE_AREA | B_EXECUTE_AREA);
-	memset(area->page_protections, areaProtection | (areaProtection << 4),
-		bytes);
+	memset(area->page_protections, areaProtection | (areaProtection << 4), bytes);
+
+	// clear protections from the area
+	area->protection &= ~(B_READ_AREA | B_WRITE_AREA | B_EXECUTE_AREA
+		| B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA | B_KERNEL_EXECUTE_AREA);
 	return B_OK;
 }
 
@@ -1939,8 +1942,8 @@ vm_map_physical_memory(team_id team, const char* name, void** _address,
 	addressRestrictions.address = *_address;
 	addressRestrictions.address_specification = addressSpec & ~B_MEMORY_TYPE_MASK;
 	status = map_backing_store(locker.AddressSpace(), cache, 0, name, size,
-		B_FULL_LOCK, protection, 0, REGION_NO_PRIVATE_MAP, 0, &addressRestrictions,
-		true, &area, _address);
+		B_FULL_LOCK, protection, 0, REGION_NO_PRIVATE_MAP, CREATE_AREA_DONT_COMMIT_MEMORY,
+		&addressRestrictions, true, &area, _address);
 
 	if (status < B_OK)
 		cache->ReleaseRefLocked();
@@ -2058,8 +2061,8 @@ vm_map_physical_memory_vecs(team_id team, const char* name, void** _address,
 	virtual_address_restrictions addressRestrictions = {};
 	addressRestrictions.address = *_address;
 	addressRestrictions.address_specification = addressSpec & ~B_MEMORY_TYPE_MASK;
-	result = map_backing_store(locker.AddressSpace(), cache, 0, name,
-		size, B_FULL_LOCK, protection, 0, REGION_NO_PRIVATE_MAP, 0,
+	result = map_backing_store(locker.AddressSpace(), cache, 0, name, size,
+		B_FULL_LOCK, protection, 0, REGION_NO_PRIVATE_MAP, CREATE_AREA_DONT_COMMIT_MEMORY,
 		&addressRestrictions, true, &area, _address);
 
 	if (result != B_OK)
@@ -2145,7 +2148,7 @@ vm_create_null_area(team_id team, const char* name, void** address,
 	addressRestrictions.address_specification = addressSpec;
 	status = map_backing_store(locker.AddressSpace(), cache, 0, name, size,
 		B_LAZY_LOCK, B_KERNEL_READ_AREA, B_KERNEL_READ_AREA,
-		REGION_NO_PRIVATE_MAP, flags,
+		REGION_NO_PRIVATE_MAP, flags | CREATE_AREA_DONT_COMMIT_MEMORY,
 		&addressRestrictions, true, &area, address);
 
 	if (status < B_OK) {
@@ -2477,13 +2480,17 @@ vm_clone_area(team_id team, const char* name, void** address,
 	} else if (sourceArea->cache_type == CACHE_TYPE_NULL) {
 		status = B_NOT_ALLOWED;
 	} else {
+		uint32 flags = 0;
+		if (mapping != REGION_PRIVATE_MAP)
+			flags |= CREATE_AREA_DONT_COMMIT_MEMORY;
+
 		virtual_address_restrictions addressRestrictions = {};
 		addressRestrictions.address = *address;
 		addressRestrictions.address_specification = addressSpec;
 		status = map_backing_store(targetAddressSpace, cache,
 			sourceArea->cache_offset, name, sourceArea->Size(),
 			sourceArea->wiring, protection, sourceArea->protection_max,
-			mapping, 0, &addressRestrictions,
+			mapping, flags, &addressRestrictions,
 			kernel, &newArea, address);
 	}
 	if (status == B_OK && mapping != REGION_PRIVATE_MAP) {
@@ -3030,6 +3037,16 @@ vm_set_area_protection(team_id team, area_id areaID, uint32 newProtection,
 				restart = true;
 		}
 	} while (restart);
+
+	if (area->page_protections != NULL) {
+		// Get rid of the per-page protections.
+		free_etc(area->page_protections,
+			area->address_space == VMAddressSpace::Kernel() ? HEAP_DONT_LOCK_KERNEL_SPACE : 0);
+		area->page_protections = NULL;
+
+		// Assume the existing protections don't match the new ones.
+		isWritable = !becomesWritable;
+	}
 
 	bool changePageProtection = true;
 	bool changeTopCachePagesOnly = false;
@@ -3621,7 +3638,7 @@ dump_caches(int argc, char** argv)
 		totalCount++;
 		if (cache->source == NULL) {
 			cache_info stackInfo;
-			cache_info& info = rootCount < (uint32)kCacheInfoTableCount
+			cache_info& info = rootCount < kCacheInfoTableCount
 				? sCacheInfoTable[rootCount] : stackInfo;
 			rootCount++;
 			info.cache = cache;
@@ -3635,26 +3652,26 @@ dump_caches(int argc, char** argv)
 		cache = cache->debug_next;
 	}
 
-	if (rootCount <= (uint32)kCacheInfoTableCount) {
-		qsort(sCacheInfoTable, rootCount, sizeof(cache_info),
-			sortByPageCount
-				? &cache_info_compare_page_count
-				: &cache_info_compare_committed);
-	}
-
 	kprintf("total committed memory: %" B_PRIdOFF ", total used pages: %"
 		B_PRIuPHYSADDR "\n", totalCommitted, totalPages);
 	kprintf("%" B_PRIu32 " caches (%" B_PRIu32 " root caches), sorted by %s "
 		"per cache tree...\n\n", totalCount, rootCount, sortByPageCount ?
 			"page count" : "committed size");
 
-	if (rootCount <= (uint32)kCacheInfoTableCount) {
-		for (uint32 i = 0; i < rootCount; i++) {
-			cache_info& info = sCacheInfoTable[i];
-			dump_caches_recursively(info.cache, info, 0);
-		}
-	} else
+	if (rootCount > kCacheInfoTableCount) {
 		kprintf("Cache info table too small! Can't sort and print caches!\n");
+		return 0;
+	}
+
+	qsort(sCacheInfoTable, rootCount, sizeof(cache_info),
+		sortByPageCount
+			? &cache_info_compare_page_count
+			: &cache_info_compare_committed);
+
+	for (uint32 i = 0; i < rootCount; i++) {
+		cache_info& info = sCacheInfoTable[i];
+		dump_caches_recursively(info.cache, info, 0);
+	}
 
 	return 0;
 }
@@ -4308,8 +4325,8 @@ is_page_in_physical_memory_range(kernel_args* args, phys_addr_t address)
 	// allocated
 	for (uint32 i = 0; i < args->num_physical_memory_ranges; i++) {
 		if (address >= args->physical_memory_range[i].start
-			&& address < args->physical_memory_range[i].start
-				+ args->physical_memory_range[i].size)
+			&& address < (args->physical_memory_range[i].start
+				+ args->physical_memory_range[i].size))
 			return true;
 	}
 	return false;
@@ -4324,19 +4341,18 @@ vm_allocate_early_physical_page(kernel_args* args)
 		return 0;
 	}
 
+	// Try expanding the existing physical ranges upwards.
 	for (uint32 i = 0; i < args->num_physical_allocated_ranges; i++) {
-		phys_addr_t nextPage;
-
-		nextPage = args->physical_allocated_range[i].start
+		phys_addr_t nextPage = args->physical_allocated_range[i].start
 			+ args->physical_allocated_range[i].size;
-		// see if the page after the next allocated paddr run can be allocated
-		if (i + 1 < args->num_physical_allocated_ranges
-			&& args->physical_allocated_range[i + 1].size != 0) {
-			// see if the next page will collide with the next allocated range
-			if (nextPage >= args->physical_allocated_range[i+1].start)
+
+		// make sure the next page does not collide with the next allocated range
+		if ((i + 1) < args->num_physical_allocated_ranges
+				&& args->physical_allocated_range[i + 1].size != 0) {
+			if (nextPage >= args->physical_allocated_range[i + 1].start)
 				continue;
 		}
-		// see if the next physical page fits in the memory block
+		// see if the next page fits in the memory block
 		if (is_page_in_physical_memory_range(args, nextPage)) {
 			// we got one!
 			args->physical_allocated_range[i].size += B_PAGE_SIZE;
@@ -4346,14 +4362,12 @@ vm_allocate_early_physical_page(kernel_args* args)
 
 	// Expanding upwards didn't work, try going downwards.
 	for (uint32 i = 0; i < args->num_physical_allocated_ranges; i++) {
-		phys_addr_t nextPage;
+		phys_addr_t nextPage = args->physical_allocated_range[i].start - B_PAGE_SIZE;
 
-		nextPage = args->physical_allocated_range[i].start - B_PAGE_SIZE;
-		// see if the page after the prev allocated paddr run can be allocated
-		if (i > 0 && args->physical_allocated_range[i - 1].size != 0) {
-			// see if the next page will collide with the next allocated range
-			if (nextPage < args->physical_allocated_range[i-1].start
-				+ args->physical_allocated_range[i-1].size)
+		// make sure the next page does not collide with the previous allocated range
+		if ((i > 0) && args->physical_allocated_range[i - 1].size != 0) {
+			if (nextPage < args->physical_allocated_range[i - 1].start
+					+ args->physical_allocated_range[i - 1].size)
 				continue;
 		}
 		// see if the next physical page fits in the memory block
@@ -4361,6 +4375,32 @@ vm_allocate_early_physical_page(kernel_args* args)
 			// we got one!
 			args->physical_allocated_range[i].start -= B_PAGE_SIZE;
 			args->physical_allocated_range[i].size += B_PAGE_SIZE;
+			return nextPage / B_PAGE_SIZE;
+		}
+	}
+
+	// Try starting a new range.
+	if (args->num_physical_allocated_ranges < MAX_PHYSICAL_ALLOCATED_RANGE) {
+		const uint32 next = args->num_physical_allocated_ranges;
+		phys_addr_t lastPage = args->physical_allocated_range[next - 1].start
+			+ args->physical_allocated_range[next - 1].size;
+
+		phys_addr_t nextPage = 0;
+		for (uint32 i = 0; i < args->num_physical_memory_ranges; i++) {
+			// Ignore everything before the last-allocated page, as well as small ranges.
+			if (args->physical_memory_range[i].start < lastPage)
+				continue;
+			if (args->physical_memory_range[i].size < (B_PAGE_SIZE * 128))
+				continue;
+
+			nextPage = args->physical_memory_range[i].start;
+		}
+
+		if (nextPage != 0) {
+			// we got one!
+			args->num_physical_allocated_ranges++;
+			args->physical_allocated_range[next].start = nextPage;
+			args->physical_allocated_range[next].size = B_PAGE_SIZE;
 			return nextPage / B_PAGE_SIZE;
 		}
 	}

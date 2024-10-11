@@ -130,8 +130,15 @@ arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 	TRACE(("arch_thread_init_kthread_stack(%s): stack top %p, function %p",
 		thread->name, (const char*)kstackTop, (const char *)function));
 
-	// clear the kernel stack
-	memset(kstack + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE, 0, KERNEL_STACK_SIZE);
+	// clear the kernel stack (already done by caller ?)
+#if KDEBUG > 0
+#	if defined(DEBUG_KERNEL_STACKS) && defined(STACK_GROWS_DOWNWARDS)
+	memset((void*)(kstack + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE), 0,
+		KERNEL_STACK_SIZE);
+#	else
+	memset(stack, 0, KERNEL_STACK_SIZE);
+#	endif
+#endif
 
 	// space for frame pointer and return address, and stack frames must be
 	// 16 byte aligned
@@ -139,10 +146,20 @@ arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 	kstackTop = (addr_t*)((addr_t)kstackTop & ~0xf);
 
 	// LR, CR, r2, r13-r31, f13-f31, as pushed by ppc_context_switch()
-	kstackTop -= 22 + 2 * 19;
+	for (int i = 0; i <= 22 + 2 * 19; i++) {
+		*--kstackTop = 0;
+	}
+	//kstackTop -= 22 + 2 * 19;
 
+	// LR ?
 	kstackTop[0] = (addr_t)function;
-	kstackTop[1] = (addr_t)data;
+	// CR ?
+	asm("mfcr  	%r0"); 
+        asm("stw 	%%r0,4(%0)" :: "r"(kstackTop));
+	// Saving R2
+        asm("stw 	%%r2,8(%0)" :: "r"(kstackTop));
+	// R3
+	kstackTop[3] = (addr_t)data;
 
 	// save this stack position
 	thread->arch_info.sp = kstackTop;

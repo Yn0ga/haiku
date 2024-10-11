@@ -35,7 +35,7 @@ FUNCTION_END(arch_int_enable_interrupts)
 
 
 /* int arch_int_disable_interrupts(void)
- * r3
+ * r31
  */
 FUNCTION(arch_int_disable_interrupts):
 	mfmsr	%r4							// load msr
@@ -292,6 +292,9 @@ FUNCTION(ppc_context_switch):
 
 	// r2, r13-31
 	lwzu		%r2, 4(%r1)
+	// r3 -> r10
+	lwzu		%r3, 4(%r1)
+	// r13-31
 	lwzu		%r13, 4(%r1)
 	lwzu		%r14, 4(%r1)
 	lwzu		%r15, 4(%r1)

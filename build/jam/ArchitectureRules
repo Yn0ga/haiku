@@ -402,7 +402,7 @@ rule KernelArchitectureSetup architecture
 			# relocate the kernel, since the virtual address space layout at
 			# boot time is not fixed.
 			HAIKU_KERNEL_PIC_CCFLAGS = -fPIE -mstrict-align ;
-			HAIKU_KERNEL_PIC_LINKFLAGS = -shared -fPIE -z max-page-size=0x1000 ;
+			HAIKU_KERNEL_PIC_LINKFLAGS = -shared -fPIE -z max-page-size=0x1000  -z relro ;
 			HAIKU_KERNEL_ADDON_LINKFLAGS = -z max-page-size=0x1000 -T $(HAIKU_TOP)/src/system/ldscripts/ppc/stage2.ld ;
 
 		case riscv64 :

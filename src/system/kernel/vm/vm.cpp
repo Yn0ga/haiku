@@ -4200,11 +4200,9 @@ create_preloaded_image_areas(struct preloaded_image* _image)
 void
 vm_free_kernel_args(kernel_args* args)
 {
-	uint32 i;
-
 	TRACE(("vm_free_kernel_args()\n"));
 
-	for (i = 0; i < args->num_kernel_args_ranges; i++) {
+	for (uint32 i = 0; i < args->num_kernel_args_ranges; i++) {
 		area_id area = area_for((void*)(addr_t)args->kernel_args_range[i].start);
 		if (area >= B_OK)
 			delete_area(area);
@@ -4218,11 +4216,11 @@ allocate_kernel_args(kernel_args* args)
 	TRACE(("allocate_kernel_args()\n"));
 
 	for (uint32 i = 0; i < args->num_kernel_args_ranges; i++) {
-		void* address = (void*)(addr_t)args->kernel_args_range[i].start;
+		const addr_range& range = args->kernel_args_range[i];
+		void* address = (void*)(addr_t)range.start;
 
 		create_area("_kernel args_", &address, B_EXACT_ADDRESS,
-			args->kernel_args_range[i].size, B_ALREADY_WIRED,
-			B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
+			range.size, B_ALREADY_WIRED, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 	}
 }
 
@@ -4233,9 +4231,9 @@ unreserve_boot_loader_ranges(kernel_args* args)
 	TRACE(("unreserve_boot_loader_ranges()\n"));
 
 	for (uint32 i = 0; i < args->num_virtual_allocated_ranges; i++) {
+		const addr_range& range = args->virtual_allocated_range[i];
 		vm_unreserve_address_range(VMAddressSpace::KernelID(),
-			(void*)(addr_t)args->virtual_allocated_range[i].start,
-			args->virtual_allocated_range[i].size);
+			(void*)(addr_t)range.start, range.size);
 	}
 }
 
@@ -4246,18 +4244,19 @@ reserve_boot_loader_ranges(kernel_args* args)
 	TRACE(("reserve_boot_loader_ranges()\n"));
 
 	for (uint32 i = 0; i < args->num_virtual_allocated_ranges; i++) {
-		void* address = (void*)(addr_t)args->virtual_allocated_range[i].start;
+		const addr_range& range = args->virtual_allocated_range[i];
+		void* address = (void*)(addr_t)range.start;
 
 		// If the address is no kernel address, we just skip it. The
 		// architecture specific code has to deal with it.
 		if (!IS_KERNEL_ADDRESS(address)) {
 			dprintf("reserve_boot_loader_ranges(): Skipping range: %p, %"
-				B_PRIu64 "\n", address, args->virtual_allocated_range[i].size);
+				B_PRIu64 "\n", address, range.size);
 			continue;
 		}
 
 		status_t status = vm_reserve_address_range(VMAddressSpace::KernelID(),
-			&address, B_EXACT_ADDRESS, args->virtual_allocated_range[i].size, 0);
+			&address, B_EXACT_ADDRESS, range.size, 0);
 		if (status < B_OK)
 			panic("could not reserve boot loader ranges\n");
 	}
@@ -4268,48 +4267,51 @@ static addr_t
 allocate_early_virtual(kernel_args* args, size_t size, addr_t alignment)
 {
 	size = PAGE_ALIGN(size);
+	if (alignment <= B_PAGE_SIZE) {
+		// All allocations are naturally page-aligned.
+		alignment = 0;
+	} else {
+		ASSERT((alignment % B_PAGE_SIZE) == 0);
+	}
 
-	// find a slot in the virtual allocation addr range
+	// Find a slot in the virtual allocation ranges.
 	for (uint32 i = 1; i < args->num_virtual_allocated_ranges; i++) {
-		// check to see if the space between this one and the last is big enough
-		addr_t rangeStart = args->virtual_allocated_range[i].start;
-		addr_t previousRangeEnd = args->virtual_allocated_range[i - 1].start
-			+ args->virtual_allocated_range[i - 1].size;
+		// Check if the space between this one and the previous is big enough.
+		const addr_range& range = args->virtual_allocated_range[i];
+		addr_range& previousRange = args->virtual_allocated_range[i - 1];
+		const addr_t previousRangeEnd = previousRange.start + previousRange.size;
 
 		addr_t base = alignment > 0
 			? ROUNDUP(previousRangeEnd, alignment) : previousRangeEnd;
 
-		if (base >= KERNEL_BASE && base < rangeStart
-				&& rangeStart - base >= size) {
-			args->virtual_allocated_range[i - 1].size
-				+= base + size - previousRangeEnd;
+		if (base >= KERNEL_BASE && base < range.start && (range.start - base) >= size) {
+			previousRange.size += base + size - previousRangeEnd;
 			return base;
 		}
 	}
 
-	// we hadn't found one between allocation ranges. this is ok.
-	// see if there's a gap after the last one
-	int lastEntryIndex = args->num_virtual_allocated_ranges - 1;
-	addr_t lastRangeEnd = args->virtual_allocated_range[lastEntryIndex].start
-		+ args->virtual_allocated_range[lastEntryIndex].size;
+	// We didn't find one between allocation ranges. This is OK.
+	// See if there's a gap after the last one.
+	addr_range& lastRange
+		= args->virtual_allocated_range[args->num_virtual_allocated_ranges - 1];
+	const addr_t lastRangeEnd = lastRange.start + lastRange.size;
 	addr_t base = alignment > 0
 		? ROUNDUP(lastRangeEnd, alignment) : lastRangeEnd;
 	if (KERNEL_BASE + (KERNEL_SIZE - 1) - base >= size) {
-		args->virtual_allocated_range[lastEntryIndex].size
-			+= base + size - lastRangeEnd;
+		lastRange.size += base + size - lastRangeEnd;
 		return base;
 	}
 
-	// see if there's a gap before the first one
-	addr_t rangeStart = args->virtual_allocated_range[0].start;
-	if (rangeStart > KERNEL_BASE && rangeStart - KERNEL_BASE >= size) {
-		base = rangeStart - size;
+	// See if there's a gap before the first one.
+	addr_range& firstRange = args->virtual_allocated_range[0];
+	if (firstRange.start > KERNEL_BASE && (firstRange.start - KERNEL_BASE) >= size) {
+		base = firstRange.start - size;
 		if (alignment > 0)
 			base = ROUNDDOWN(base, alignment);
 
 		if (base >= KERNEL_BASE) {
-			args->virtual_allocated_range[0].start = base;
-			args->virtual_allocated_range[0].size += rangeStart - base;
+			firstRange.start = base;
+			firstRange.size += firstRange.start - base;
 			return base;
 		}
 	}
@@ -4324,9 +4326,8 @@ is_page_in_physical_memory_range(kernel_args* args, phys_addr_t address)
 	// TODO: horrible brute-force method of determining if the page can be
 	// allocated
 	for (uint32 i = 0; i < args->num_physical_memory_ranges; i++) {
-		if (address >= args->physical_memory_range[i].start
-			&& address < (args->physical_memory_range[i].start
-				+ args->physical_memory_range[i].size))
+		const addr_range& range = args->physical_memory_range[i];
+		if (address >= range.start && address < (range.start + range.size))
 			return true;
 	}
 	return false;
@@ -4342,65 +4343,68 @@ vm_allocate_early_physical_page(kernel_args* args)
 	}
 
 	// Try expanding the existing physical ranges upwards.
-	for (uint32 i = 0; i < args->num_physical_allocated_ranges; i++) {
-		phys_addr_t nextPage = args->physical_allocated_range[i].start
-			+ args->physical_allocated_range[i].size;
+	for (int32 i = args->num_physical_allocated_ranges - 1; i > 0; i--) {
+		addr_range& range = args->physical_allocated_range[i];
+		phys_addr_t nextPage = range.start + range.size;
 
 		// make sure the next page does not collide with the next allocated range
-		if ((i + 1) < args->num_physical_allocated_ranges
-				&& args->physical_allocated_range[i + 1].size != 0) {
-			if (nextPage >= args->physical_allocated_range[i + 1].start)
+		if ((i + 1) < (int32)args->num_physical_allocated_ranges) {
+			addr_range& nextRange = args->physical_allocated_range[i + 1];
+			if (nextRange.size != 0 && nextPage >= nextRange.start)
 				continue;
 		}
 		// see if the next page fits in the memory block
 		if (is_page_in_physical_memory_range(args, nextPage)) {
 			// we got one!
-			args->physical_allocated_range[i].size += B_PAGE_SIZE;
+			range.size += B_PAGE_SIZE;
 			return nextPage / B_PAGE_SIZE;
 		}
 	}
 
 	// Expanding upwards didn't work, try going downwards.
 	for (uint32 i = 0; i < args->num_physical_allocated_ranges; i++) {
-		phys_addr_t nextPage = args->physical_allocated_range[i].start - B_PAGE_SIZE;
+		addr_range& range = args->physical_allocated_range[i];
+		phys_addr_t nextPage = range.start - B_PAGE_SIZE;
 
 		// make sure the next page does not collide with the previous allocated range
-		if ((i > 0) && args->physical_allocated_range[i - 1].size != 0) {
-			if (nextPage < args->physical_allocated_range[i - 1].start
-					+ args->physical_allocated_range[i - 1].size)
+		if (i > 0) {
+			addr_range& previousRange = args->physical_allocated_range[i - 1];
+			if (previousRange.size != 0 && nextPage < (previousRange.start + previousRange.size))
 				continue;
 		}
 		// see if the next physical page fits in the memory block
 		if (is_page_in_physical_memory_range(args, nextPage)) {
 			// we got one!
-			args->physical_allocated_range[i].start -= B_PAGE_SIZE;
-			args->physical_allocated_range[i].size += B_PAGE_SIZE;
+			range.start -= B_PAGE_SIZE;
+			range.size += B_PAGE_SIZE;
 			return nextPage / B_PAGE_SIZE;
 		}
 	}
 
 	// Try starting a new range.
 	if (args->num_physical_allocated_ranges < MAX_PHYSICAL_ALLOCATED_RANGE) {
-		const uint32 next = args->num_physical_allocated_ranges;
-		phys_addr_t lastPage = args->physical_allocated_range[next - 1].start
-			+ args->physical_allocated_range[next - 1].size;
+		const addr_range& lastRange =
+			args->physical_allocated_range[args->num_physical_allocated_ranges - 1];
+		const phys_addr_t lastPage = lastRange.start + lastRange.size;
 
 		phys_addr_t nextPage = 0;
 		for (uint32 i = 0; i < args->num_physical_memory_ranges; i++) {
+			const addr_range& range = args->physical_memory_range[i];
 			// Ignore everything before the last-allocated page, as well as small ranges.
-			if (args->physical_memory_range[i].start < lastPage)
-				continue;
-			if (args->physical_memory_range[i].size < (B_PAGE_SIZE * 128))
+			if (range.start < lastPage || range.size < (B_PAGE_SIZE * 128))
 				continue;
 
-			nextPage = args->physical_memory_range[i].start;
+			nextPage = range.start;
+			break;
 		}
 
 		if (nextPage != 0) {
 			// we got one!
+			addr_range& range =
+				args->physical_allocated_range[args->num_physical_allocated_ranges];
 			args->num_physical_allocated_ranges++;
-			args->physical_allocated_range[next].start = nextPage;
-			args->physical_allocated_range[next].size = B_PAGE_SIZE;
+			range.start = nextPage;
+			range.size = B_PAGE_SIZE;
 			return nextPage / B_PAGE_SIZE;
 		}
 	}
@@ -4429,7 +4433,7 @@ vm_allocate_early(kernel_args* args, size_t virtualSize, size_t physicalSize,
 	}
 
 	// map the pages
-	for (uint32 i = 0; i < PAGE_ALIGN(physicalSize) / B_PAGE_SIZE; i++) {
+	for (uint32 i = 0; i < HOWMANY(physicalSize, B_PAGE_SIZE); i++) {
 		page_num_t physicalAddress = vm_allocate_early_physical_page(args);
 		if (physicalAddress == 0)
 			panic("error allocating early page!\n");

@@ -73,7 +73,7 @@ segment_descriptor gBootGDT[BOOT_GDT_SEGMENT_COUNT];
 
 static const uint32 kDefaultPageTableFlags = 0x07;	// present, user, R/W
 static const size_t kMaxKernelSize = 0x1000000;		// 16 MB for the kernel
-static const size_t kIdentityMapEnd = (8 * 1024 * 1024);
+static const size_t kIdentityMapEnd = 0x0800000;	// 8 MB
 
 // working page directory and page table
 static uint32 *sPageDirectory = 0;
@@ -112,6 +112,9 @@ get_next_virtual_address(size_t size)
 static addr_t
 get_next_physical_address(size_t size)
 {
+	if ((size % B_PAGE_SIZE) != 0)
+		panic("request for non-page-aligned physical memory!");
+
 	uint64 base;
 	if (!get_free_address_range(gKernelArgs.physical_allocated_range,
 			gKernelArgs.num_physical_allocated_ranges, sNextPhysicalAddress,
@@ -393,7 +396,7 @@ mmu_allocate(void *virtualAddress, size_t size)
 	TRACE("mmu_allocate: requested vaddr: %p, next free vaddr: 0x%lx, size: "
 		"%ld\n", virtualAddress, sNextVirtualAddress, size);
 
-	size = (size + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
+	size = HOWMANY(size, B_PAGE_SIZE);
 		// get number of pages to map
 
 	if (virtualAddress != NULL) {
@@ -406,7 +409,7 @@ mmu_allocate(void *virtualAddress, size_t size)
 
 		// is the address within the valid range?
 		if (address < KERNEL_LOAD_BASE || address + size * B_PAGE_SIZE
-			>= KERNEL_LOAD_BASE + kMaxKernelSize)
+				>= KERNEL_LOAD_BASE + kMaxKernelSize)
 			return NULL;
 
 		for (uint32 i = 0; i < size; i++) {
@@ -484,7 +487,8 @@ mmu_free(void *virtualAddress, size_t size)
 	addr_t address = (addr_t)virtualAddress;
 	addr_t pageOffset = address % B_PAGE_SIZE;
 	address -= pageOffset;
-	size = (size + pageOffset + B_PAGE_SIZE - 1) / B_PAGE_SIZE * B_PAGE_SIZE;
+	size += pageOffset;
+	size = ROUNDUP(size, B_PAGE_SIZE);
 
 	// is the address within the valid range?
 	if (address < KERNEL_LOAD_BASE || address + size > sNextVirtualAddress) {
@@ -813,6 +817,7 @@ platform_free_region(void *address, size_t size)
 ssize_t
 platform_allocate_heap_region(size_t size, void **_base)
 {
+	size = ROUNDUP(size, B_PAGE_SIZE);
 	addr_t base = get_next_physical_address(size);
 	if (base == 0)
 		return B_NO_MEMORY;

@@ -4,9 +4,9 @@ RemotePackageRepository HaikuPorts
 	:
 	# architecture "any" packages
 	be_book-2008_10_26-7
-	ca_root_certificates-2024_07_02-1
+	ca_root_certificates-2024_11_26-1
 	timgmsoundfont-fixed-5
-	noto-20240201-1
+	noto-20250201-1
 	wqy_microhei-0.2.0~beta-4
 	:
 	# repository architecture packages

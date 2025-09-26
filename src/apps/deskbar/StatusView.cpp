@@ -146,12 +146,11 @@ TReplicantTray::TReplicantTray(TBarView* barView)
 	fAlignmentSupport(false)
 {
 	// scale replicants by font size
-	fMaxReplicantHeight = std::max(gMinReplicantHeight,
-		float(((TBarApp*)be_app)->TeamIconSize()));
+	fMaxReplicantHeight
+		= std::max(gMinReplicantHeight, (float)static_cast<TBarApp*>(be_app)->TeamIconSize());
 	// but not bigger than TabHeight which depends on be_bold_font
 	// TODO this should only apply to mini-mode but we set it once here for all
-	fMaxReplicantHeight = std::min(fMaxReplicantHeight,
-		fBarView->TabHeight() - 4);
+	fMaxReplicantHeight = std::min(fMaxReplicantHeight, fBarView->TabHeight() - 1);
 	// TODO: depends on window size... (so use something like
 	// max(129, height * 3), and restrict the minimum window width for it)
 	// Use bold font because it depends on the window tab height.
@@ -164,8 +163,7 @@ TReplicantTray::TReplicantTray(TBarView* barView)
 	}
 
 	// Create the time view
-	fTime = new TTimeView(fMinimumTrayWidth, fMaxReplicantHeight - 1.0,
-		fBarView);
+	fTime = new TTimeView(fMinimumTrayWidth, fMaxReplicantHeight + 1, fBarView);
 }
 
 
@@ -181,11 +179,7 @@ TReplicantTray::AttachedToWindow()
 {
 	BView::AttachedToWindow();
 
-	if (be_control_look != NULL) {
-		AdoptParentColors();
-	} else {
-		SetViewUIColor(B_MENU_BACKGROUND_COLOR,	B_DARKEN_1_TINT);
-	}
+	AdoptParentColors();
 	SetDrawingMode(B_OP_COPY);
 
 	Window()->SetPulseRate(1000000);
@@ -240,8 +234,7 @@ TReplicantTray::GetPreferredSize(float* preferredWidth, float* preferredHeight)
 	float height = fMinTrayHeight;
 
 	if (fBarView->Vertical()) {
-		width = static_cast<TBarApp*>(be_app)->Settings()->width
-			- gDragWidth - kGutter;
+		width = static_cast<TBarApp*>(be_app)->Settings()->width - gDragWidth - kGutter;
 		width = std::max(gMinimumTrayWidth, width);
 
 		if (fRightBottomReplicant.IsValid())
@@ -273,7 +266,7 @@ TReplicantTray::GetPreferredSize(float* preferredWidth, float* preferredHeight)
 		// if mini-mode set to tab height
 		// else if horizontal mode set to team menu item height
 		if (fBarView->MiniState())
-			height = std::max(fMinTrayHeight, fBarView->TabHeight());
+			height = std::max(fMinTrayHeight, fBarView->TabHeight() - 1);
 		else
 			height = fBarView->TeamMenuItemHeight();
 	}
@@ -1186,7 +1179,7 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 		if (fBarView->Vertical() && !fBarView->Left())
 			loc.x += gDragWidth; // move past dragger on left
 
-		loc.y = floorf((fBarView->TabHeight() - fMaxReplicantHeight) / 2) - 1;
+		loc.y = floorf((fBarView->TabHeight() - 1 - fMaxReplicantHeight) / 2);
 	} else {
 		loc.x -= 2; // keeps everything lined up nicely
 		const int32 iconSize = static_cast<TBarApp*>(be_app)->TeamIconSize();
@@ -1198,8 +1191,7 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 			loc.y = yOffset;
 		} else {
 			// align bottom
-			loc.y = (fBarView->TeamMenuItemHeight() + 1)
-				- fMaxReplicantHeight - yOffset;
+			loc.y = fBarView->TeamMenuItemHeight() + 1 - fMaxReplicantHeight - yOffset;
 		}
 	}
 
@@ -1376,10 +1368,7 @@ TDragRegion::AttachedToWindow()
 
 	CalculateRegions();
 
-	if (be_control_look != NULL)
-		SetViewUIColor(B_MENU_BACKGROUND_COLOR, 1.1);
-	else
-		SetViewUIColor(B_MENU_BACKGROUND_COLOR);
+	SetViewUIColor(B_MENU_BACKGROUND_COLOR, 1.1);
 
 	ResizeToPreferred();
 }
@@ -1792,10 +1781,7 @@ TResizeControl::AttachedToWindow()
 {
 	BView::AttachedToWindow();
 
-	if (be_control_look != NULL)
-		SetViewUIColor(B_MENU_BACKGROUND_COLOR, 1.1);
-	else
-		SetViewUIColor(B_MENU_BACKGROUND_COLOR);
+	SetViewUIColor(B_MENU_BACKGROUND_COLOR, 1.1);
 }
 
 

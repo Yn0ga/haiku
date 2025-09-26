@@ -188,6 +188,12 @@
 #define IA32_MSR_PAT_TYPE_WRITE_BACK					0x6ULL
 #define IA32_MSR_PAT_TYPE_UNCACHED						0x7ULL
 
+// cpuid leaves
+#define IA32_CPUID_LEAF_MWAIT				0x5
+#define IA32_CPUID_LEAF_XSTATE				0xd
+#define IA32_CPUID_LEAF_TSC					0x15
+#define IA32_CPUID_LEAF_FREQUENCY			0x16
+
 // x86 features from cpuid eax 1, edx register
 // reference http://www.intel.com/Assets/en_US/PDF/appnote/241618.pdf (Table 5-5)
 #define IA32_FEATURE_FPU	(1 << 0) // x87 fpu
@@ -259,8 +265,9 @@
 #define IA32_FEATURE_EXT_HYPERVISOR	(1 << 31) // Running on a hypervisor
 
 // x86 features from cpuid eax 0x80000001, ecx register (AMD)
-#define IA32_FEATURE_AMD_EXT_CMPLEGACY	(1 << 1) // Core MP legacy mode
-#define IA32_FEATURE_AMD_EXT_TOPOLOGY	(1 << 22) // Topology extensions
+#define IA32_FEATURE_AMD_EXT_CMPLEGACY	(1 << 1)	// Core MP legacy mode
+#define IA32_FEATURE_AMD_EXT_TOPOLOGY	(1 << 22)	// Topology extensions
+#define IA32_FEATURE_AMD_EXT_MWAITX		(1 << 29)	// MWAITX, MONITORX instructions
 
 // x86 features from cpuid eax 0x80000001, edx register (AMD)
 // only care about the ones that are unique to this register
@@ -281,10 +288,6 @@
 											| IA32_FEATURE_AMD_EXT_PDPE1GB	\
 											| IA32_FEATURE_AMD_EXT_RDTSCP	\
 											| IA32_FEATURE_AMD_EXT_LONG)
-
-// x86 defined features from cpuid eax 5, ecx register
-#define IA32_FEATURE_POWER_MWAIT		(1 << 0)
-#define IA32_FEATURE_INTERRUPT_MWAIT	(1 << 1)
 
 // x86 defined features from cpuid eax 6, eax register
 // reference https://software.intel.com/content/dam/develop/public/us/en/documents/253666-sdm-vol-2a.pdf (Table 3-8)
@@ -352,6 +355,7 @@
 #define IA32_FEATURE_UMIP			(1 << 2) // User-mode Instruction Prevention
 #define IA32_FEATURE_PKU			(1 << 3) // Memory Protection Keys for User-mode pages
 #define IA32_FEATURE_OSPKE			(1 << 4) // PKU enabled by OS
+#define IA32_FEATURE_WAITPKG		(1 << 5) // TPAUSE, UMONITOR, UMWAIT instructions
 #define IA32_FEATURE_AVX512VMBI2	(1 << 6) // AVX-512 Vector Bit Manipulation Instructions 2
 #define IA32_FEATURE_GFNI			(1 << 8) // Galois Field instructions
 #define IA32_FEATURE_VAES			(1 << 9) // AES instruction set (VEX-256/EVEX)
@@ -514,7 +518,6 @@ enum x86_feature_type {
 	FEATURE_EXT,            // cpuid eax=1, ecx register
 	FEATURE_EXT_AMD_ECX,	// cpuid eax=0x80000001, ecx register (AMD)
 	FEATURE_EXT_AMD,        // cpuid eax=0x80000001, edx register (AMD)
-	FEATURE_5_ECX,			// cpuid eax=5, ecx register
 	FEATURE_6_EAX,          // cpuid eax=6, eax registers
 	FEATURE_6_ECX,          // cpuid eax=6, ecx registers
 	FEATURE_7_EBX,          // cpuid eax=7, ebx registers
@@ -695,9 +698,6 @@ void x86_page_fault_exception(iframe* iframe);
 #ifndef __x86_64__
 
 void x86_swap_pgdir(addr_t newPageDir);
-
-uint64 x86_read_msr(uint32 registerNumber);
-void x86_write_msr(uint32 registerNumber, uint64 value);
 
 void x86_context_switch(struct arch_thread* oldState,
 	struct arch_thread* newState);

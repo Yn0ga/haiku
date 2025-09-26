@@ -103,20 +103,16 @@ struct ChainHash {
 	typedef chain_key	KeyType;
 	typedef	chain		ValueType;
 
-// TODO: check if this makes a good hash...
-#define HASH(o) ((uint32)(((o)->family) ^ ((o)->type) ^ ((o)->protocol)))
-
 	size_t HashKey(KeyType key) const
 	{
-		return HASH(&key);
+		// TODO: check if this makes a good hash...
+		return (uint32)(key.family ^ key.type ^ key.protocol);
 	}
 
 	size_t Hash(ValueType* value) const
 	{
-		return HASH(value);
+		return HashKey(chain_key { value->family, value->type, value->protocol });
 	}
-
-#undef HASH
 
 	bool Compare(KeyType key, ValueType* chain) const
 	{
@@ -439,18 +435,16 @@ get_domain_protocols(net_socket* socket)
 		chain = chain::Lookup(sProtocolChains, socket->family, socket->type,
 			socket->type == SOCK_RAW ? 0 : socket->protocol);
 			// in SOCK_RAW mode, we ignore the protocol information
-		if (chain == NULL) {
-			// TODO: if we want to be POSIX compatible, we should also support
-			//	the error codes EPROTONOSUPPORT and EPROTOTYPE.
-			return EAFNOSUPPORT;
-		}
 	}
 
 	// create net_protocol objects for the protocols in the chain
-
-	status_t status = chain->Acquire();
-	if (status != B_OK)
-		return status;
+	if (chain == NULL || chain->Acquire() != B_OK) {
+		if (::family::Lookup(socket->family) == NULL)
+			return EAFNOSUPPORT;
+		if (socket->type != 0 && socket->protocol == 0)
+			return EPROTOTYPE;
+		return EPROTONOSUPPORT;
+	}
 
 	net_protocol* last = NULL;
 
@@ -490,9 +484,13 @@ put_domain_protocols(net_socket* socket)
 		MutexLocker _(sChainLock);
 
 		chain = chain::Lookup(sProtocolChains, socket->family, socket->type,
-			socket->protocol);
-		if (chain == NULL)
+			socket->type == SOCK_RAW ? 0 : socket->protocol);
+		if (chain == NULL) {
+			ASSERT_PRINT(socket->first_protocol == NULL,
+				"socket has first protocol but no chain for %d:%d:%d",
+					socket->family, socket->type, socket->protocol);
 			return B_ERROR;
+		}
 	}
 
 	uninit_domain_protocols(socket);

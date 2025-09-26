@@ -1,4 +1,4 @@
-1	ukrainian	x-vnd.Haiku-MediaPlayer	390961765
+1	ukrainian	x-vnd.Haiku-MediaPlayer	520971408
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Видалити запис до смітника
 Close	MediaPlayer-PlaylistWindow		Закрити
 Volume of background clips	MediaPlayer-SettingsWindow		Гучність фонових кліпів
@@ -24,7 +24,6 @@ Resume:	MediaPlayer-SettingsWindow		Грати після запуску:
 Duration	MediaPlayer-InfoWin		Тривалість
 Import Entries	MediaPlayer-ImportPLItemsCmd		Імпортувати записи
 Open network stream	MediaPlayer-Main		Відкрити мережевий потік
-Move file to Trash	MediaPlayer-PlaylistWindow		Перемістити до смітника
 Open file…	MediaPlayer-Main		Відкрити файл…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Масштаб кнопок управління у повноекранному режимі
 View options	MediaPlayer-SettingsWindow		Параметри перегляду
@@ -58,6 +57,7 @@ Video track	MediaPlayer-Main		Відеодоріжка
 Playlist…	MediaPlayer-Main		Список відтворення…
 <unnamed media>	MediaPlayer-InfoWin		<неназване медіа>
 Save	MediaPlayer-PlaylistWindow		Зберегти
+25% scale	MediaPlayer-Main		Масштаб 25%
 Randomize Entries	MediaPlayer-RandomizePLItemsCmd		Випадкові записи
 Cancel	MediaPlayer-NetworkStream		Скасувати
 Nothing to Play	MediaPlayer-Main		Нічого відтворювати

@@ -74,8 +74,8 @@ BackgroundsView::BackgroundsView()
 	fCurrentInfo(NULL),
 	fLastImageIndex(-1),
 	fRecentFoldersLimit(10),
-	fPathList(1, true),
-	fImageList(1, true),
+	fPathList(1),
+	fImageList(1),
 	fFoundPositionSetting(false)
 {
 	SetBorder(B_NO_BORDER);
@@ -94,10 +94,11 @@ BackgroundsView::BackgroundsView()
 	fBottom = new FramePart(FRAME_BOTTOM);
 	fBottomRight = new FramePart(FRAME_BOTTOM_RIGHT);
 
-	fXPlacementText = new BTextControl(B_TRANSLATE("X:"), NULL,
-		new BMessage(kMsgImagePlacement));
-	fYPlacementText = new BTextControl(B_TRANSLATE("Y:"), NULL,
-		new BMessage(kMsgImagePlacement));
+	fXPlacementText = new BTextControl(B_TRANSLATE("X:"), NULL, NULL);
+	fXPlacementText->SetModificationMessage(new BMessage(kMsgImagePlacement));
+
+	fYPlacementText = new BTextControl(B_TRANSLATE("Y:"), NULL, NULL);
+	fYPlacementText->SetModificationMessage(new BMessage(kMsgImagePlacement));
 
 	// right-align text view
 	fXPlacementText->TextView()->SetAlignment(B_ALIGN_RIGHT);
@@ -307,7 +308,7 @@ void
 BackgroundsView::MessageReceived(BMessage* message)
 {
 	// Color drop
-	if (message->WasDropped()) {
+	if (message->WasDropped() && fPicker->IsEnabled()) {
 		rgb_color *clr;
 		ssize_t out_size;
 		if (message->FindData("RGBColor", B_RGB_COLOR_TYPE,

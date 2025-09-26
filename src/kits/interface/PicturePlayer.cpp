@@ -22,6 +22,7 @@
 #include <Gradient.h>
 #include <PictureProtocol.h>
 #include <Shape.h>
+#include <ShapePrivate.h>
 
 #include <AutoDeleter.h>
 #include <StackOrHeapArray.h>
@@ -80,11 +81,9 @@ draw_round_rect(void* _context, const BRect& rect, const BPoint& radii,
 
 
 static void
-draw_bezier(void* _context, size_t numPoints, const BPoint _points[], bool fill)
+draw_bezier(void* _context, const BPoint _points[4], bool fill)
 {
 	adapter_context* context = reinterpret_cast<adapter_context*>(_context);
-	if (numPoints != 4)
-		return;
 
 	BPoint points[4] = { _points[0], _points[1], _points[2], _points[3] };
 	((void (*)(void*, BPoint*))context->function_table[fill ? 8 : 7])(
@@ -187,7 +186,7 @@ draw_picture(void* _context, const BPoint& where, int32 token)
 
 
 static void
-set_clipping_rects(void* _context, size_t numRects, const BRect _rects[])
+set_clipping_rects(void* _context, size_t numRects, const clipping_rect _rects[])
 {
 	adapter_context* context = reinterpret_cast<adapter_context*>(_context);
 
@@ -196,7 +195,10 @@ set_clipping_rects(void* _context, size_t numRects, const BRect _rects[])
 	if (!rects.IsValid())
 		return;
 
-	memcpy((void*)rects, _rects, numRects * sizeof(BRect));
+	for (size_t i = 0; i < numRects; i++) {
+		clipping_rect srcRect = _rects[i];
+		rects[i] = BRect(srcRect.left, srcRect.top, srcRect.right, srcRect.bottom);
+	}
 
 	((void (*)(void*, BRect*, uint32))context->function_table[20])(
 		context->user_data, rects, numRects);
@@ -543,11 +545,9 @@ draw_round_rect_gradient(void* _context, const BRect& rect, const BPoint& radii,
 
 
 static void
-draw_bezier_gradient(void* _context, size_t numPoints, const BPoint _points[], BGradient& gradient, bool fill)
+draw_bezier_gradient(void* _context, const BPoint _points[4], BGradient& gradient, bool fill)
 {
 	adapter_context* context = reinterpret_cast<adapter_context*>(_context);
-	if (numPoints != 4)
-		return;
 
 	BPoint points[4] = { _points[0], _points[1], _points[2], _points[3] };
 	((void (*)(void*, BPoint*, BGradient&))context->function_table[fill ? 60 : 61])(
@@ -988,8 +988,7 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 					break;
 				}
 
-				callbacks.draw_bezier(userData, kNumControlPoints,
-					controlPoints, header->op == B_PIC_FILL_BEZIER);
+				callbacks.draw_bezier(userData, controlPoints, header->op == B_PIC_FILL_BEZIER);
 				break;
 			}
 
@@ -1062,7 +1061,7 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 
 				// TODO: remove BShape data copying
 				BShape shape;
-				shape.SetData(*opCount, *pointCount, opList, pointList);
+				BShape::Private(shape).SetData(*opCount, *pointCount, opList, pointList);
 
 				callbacks.draw_shape(userData, shape,
 					header->op == B_PIC_FILL_SHAPE);
@@ -1112,8 +1111,8 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 				}
 				ObjectDeleter<BGradient> gradientDeleter(gradient);
 
-				callbacks.draw_bezier_gradient(userData, kNumControlPoints,
-					controlPoints, *gradient, header->op == B_PIC_FILL_BEZIER_GRADIENT);
+				callbacks.draw_bezier_gradient(userData, controlPoints, *gradient,
+					header->op == B_PIC_FILL_BEZIER_GRADIENT);
 				break;
 			}
 
@@ -1163,7 +1162,7 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 
 				// TODO: remove BShape data copying
 				BShape shape;
-				shape.SetData(*opCount, *pointCount, opList, pointList);
+				BShape::Private(shape).SetData(*opCount, *pointCount, opList, pointList);
 
 				callbacks.draw_shape_gradient(userData, shape, *gradient,
 					header->op == B_PIC_FILL_SHAPE_GRADIENT);
@@ -1206,18 +1205,19 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 
 			case B_PIC_DRAW_STRING:
 			{
+				const int32* length;
+				const char* string;
 				const float* escapementSpace;
 				const float* escapementNonSpace;
-				const char* string;
-				size_t length;
 				if (callbacks.draw_string == NULL
+					|| !reader.Get(length)
+					|| !reader.Get(string, *length)
 					|| !reader.Get(escapementSpace)
-					|| !reader.Get(escapementNonSpace)
-					|| !reader.GetRemaining(string, length)) {
+					|| !reader.Get(escapementNonSpace)) {
 					break;
 				}
 
-				callbacks.draw_string(userData, string, length,
+				callbacks.draw_string(userData, string, *length,
 					*escapementSpace, *escapementNonSpace);
 				break;
 			}
@@ -1226,16 +1226,17 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 			{
 				const uint32* pointCount;
 				const BPoint* pointList;
+				const int32* length;
 				const char* string;
-				size_t length;
 				if (callbacks.draw_string_locations == NULL
 					|| !reader.Get(pointCount)
 					|| !reader.Get(pointList, *pointCount)
-					|| !reader.GetRemaining(string, length)) {
+					|| !reader.Get(length)
+					|| !reader.Get(string, *length)) {
 					break;
 				}
 
-				callbacks.draw_string_locations(userData, string, length,
+				callbacks.draw_string_locations(userData, string, *length,
 					pointList, *pointCount);
 				break;
 			}
@@ -1280,14 +1281,20 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 
 			case B_PIC_SET_CLIPPING_RECTS:
 			{
-				const uint32* numRects;
-				const BRect* rects;
-				if (callbacks.set_clipping_rects == NULL
-					|| !reader.Get(numRects) || !reader.Get(rects, *numRects)) {
+				if (callbacks.set_clipping_rects == NULL)
 					break;
-				}
 
-				callbacks.set_clipping_rects(userData, *numRects, rects);
+				const clipping_rect* frame;
+				if (!reader.Get(frame))
+					break;
+
+				uint32 numRects = reader.Remaining() / sizeof(clipping_rect);
+
+				const clipping_rect* rects;
+				if (!reader.Get(rects, numRects))
+					break;
+
+				callbacks.set_clipping_rects(userData, numRects, rects);
 				break;
 			}
 
@@ -1458,27 +1465,29 @@ PicturePlayer::_Play(const picture_player_callbacks& callbacks, void* userData,
 
 			case B_PIC_SET_FONT_FAMILY:
 			{
+				const int32* length;
 				const char* family;
-				size_t length;
 				if (callbacks.set_font_family == NULL
-					|| !reader.GetRemaining(family, length)) {
+					|| !reader.Get(length)
+					|| !reader.Get(family, *length)) {
 					break;
 				}
 
-				callbacks.set_font_family(userData, family, length);
+				callbacks.set_font_family(userData, family, *length);
 				break;
 			}
 
 			case B_PIC_SET_FONT_STYLE:
 			{
+				const int32* length;
 				const char* style;
-				size_t length;
 				if (callbacks.set_font_style == NULL
-					|| !reader.GetRemaining(style, length)) {
+					|| !reader.Get(length)
+					|| !reader.Get(style, *length)) {
 					break;
 				}
 
-				callbacks.set_font_style(userData, style, length);
+				callbacks.set_font_style(userData, style, *length);
 				break;
 			}
 

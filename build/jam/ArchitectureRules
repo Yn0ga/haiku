@@ -619,9 +619,9 @@ rule ArchitectureSetupWarnings architecture
 		# enable stack protector, if requested
 		if $(HAIKU_USE_STACK_PROTECTOR) = 1 {
 			AppendToConfigVar CCFLAGS : HAIKU_TOP $(dirTokens) :
-				-fstack-protector : $(scope) ;
+				-fstack-protector-strong -fstack-clash-protection : $(scope) ;
 			AppendToConfigVar C++FLAGS : HAIKU_TOP $(dirTokens) :
-				-fstack-protector : $(scope) ;
+				-fstack-protector-strong -fstack-clash-protection : $(scope) ;
 		}
 	}
 
@@ -666,7 +666,22 @@ rule ArchitectureSetupWarnings architecture
 #	EnableWerror src add-ons kernel drivers display ;
 	EnableWerror src add-ons kernel drivers dvb ;
 #	EnableWerror src add-ons kernel drivers graphics ;
+	EnableWerror src add-ons kernel drivers graphics 3dfx ;
+	EnableWerror src add-ons kernel drivers graphics ati ;
+	EnableWerror src add-ons kernel drivers graphics et6x00 ;
+	EnableWerror src add-ons kernel drivers graphics framebuffer ;
+	EnableWerror src add-ons kernel drivers graphics intel_i810 ;
 	EnableWerror src add-ons kernel drivers graphics intel_extreme ;
+	EnableWerror src add-ons kernel drivers graphics matrox ;
+	EnableWerror src add-ons kernel drivers graphics neomagic ;
+#	EnableWerror src add-ons kernel drivers graphics nvidia ;
+#	EnableWerror src add-ons kernel drivers graphics radeon ;
+	EnableWerror src add-ons kernel drivers graphics radeon_hd ;
+#	EnableWerror src add-ons kernel drivers graphics s3 ;
+	EnableWerror src add-ons kernel drivers graphics skeleton ;
+	EnableWerror src add-ons kernel drivers graphics vesa ;
+	EnableWerror src add-ons kernel drivers graphics via ;
+	EnableWerror src add-ons kernel drivers graphics virtio ;
 	EnableWerror src add-ons kernel drivers input ;
 	EnableWerror src add-ons kernel drivers joystick ;
 	EnableWerror src add-ons kernel drivers midi ;
@@ -781,6 +796,12 @@ rule ArchitectureSetupWarnings architecture
 	EnableWerror src system libroot posix wchar ;
 	EnableWerror src system runtime_loader ;
 
+	EnableStackProtector src add-ons input_server ;
+	EnableStackProtector src add-ons media ;
+	EnableStackProtector src add-ons print ;
+	EnableStackProtector src add-ons screen_savers ;
+	EnableStackProtector src add-ons translators ;
+	EnableStackProtector src bin ;
 	EnableStackProtector src apps ;
 	EnableStackProtector src kits ;
 	EnableStackProtector src preferences ;

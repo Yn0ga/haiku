@@ -31,7 +31,7 @@
 #include <debug_paranoia.h>
 #include <driver_settings.h>
 #include <frame_buffer_console.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <ksystem_info.h>
 #include <safemode.h>
@@ -485,6 +485,14 @@ read_line(char* buffer, int32 maxLength,
 					remove_char_from_line(buffer, position, length);
 				}
 				break;
+			case 0x1f & 'D':	// CTRL-D -- continue
+				length = 0;
+				buffer[length++] = 'e';
+				buffer[length++] = 's';
+				buffer[length++] = '\0';
+				kputchar('\n');
+				done = true;
+				break;
 			case 0x1f & 'K':	// CTRL-K -- clear line after current position
 				if (position < length) {
 					// clear chars
@@ -707,7 +715,7 @@ kgetc(void)
 			}
 		}
 
-		cpu_pause();
+		arch_debug_snooze(5000);
 	}
 }
 
@@ -956,7 +964,7 @@ enter_kernel_debugger(int32 cpu, int32& previousCPU)
 		// us. Process ICIs to ensure we get the halt request. Then we are
 		// blocking there until everyone leaves the debugger and we can
 		// try to enter it again.
-		smp_intercpu_int_handler(cpu);
+		smp_intercpu_interrupt_handler(cpu);
 	}
 
 	arch_debug_save_registers(&sDebugRegisters[cpu]);
@@ -964,7 +972,7 @@ enter_kernel_debugger(int32 cpu, int32& previousCPU)
 
 	if (!gKernelStartup && sDebuggerOnCPU != cpu && smp_get_num_cpus() > 1) {
 		// First entry on a MP system, send a halt request to all of the other
-		// CPUs. Should they try to enter the debugger they will be cought in
+		// CPUs. Should they try to enter the debugger they will be caught in
 		// the loop above.
 		smp_send_broadcast_ici_interrupts_disabled(cpu, SMP_MSG_CPU_HALT, 0, 0,
 			0, NULL, SMP_MSG_FLAG_SYNC);
@@ -1212,8 +1220,8 @@ syslog_sender(void* data)
 
 		if (!bufferPending) {
 			// We need to have exclusive access to our syslog buffer
-			cpu_status state = disable_interrupts();
-			acquire_spinlock(&sSpinlock);
+			MutexLocker mutexLocker(sOutputLock);
+			InterruptsSpinLocker spinLocker(sSpinlock);
 
 			length = ring_buffer_readable(sSyslogBuffer)
 				- sSyslogBufferOffset;
@@ -1233,9 +1241,6 @@ syslog_sender(void* data)
 				message, length);
 			sSyslogBufferOffset += length;
 			length += (addr_t)message - (addr_t)sSyslogMessage->message;
-
-			release_spinlock(&sSpinlock);
-			restore_interrupts(state);
 		}
 
 		if (length == 0) {
@@ -1595,6 +1600,10 @@ flush_pending_repeats(bool notifySyslog)
 static void
 check_pending_repeats(void* /*data*/, int /*iteration*/)
 {
+	if (mutex_lock_with_timeout(&sOutputLock, B_RELATIVE_TIMEOUT, 100 * 1000) != B_OK)
+		return;
+	MutexLocker locker(sOutputLock, true);
+
 	if (sMessageRepeatCount > 0
 		&& (system_time() - sMessageRepeatLastTime > 1000000
 			|| system_time() - sMessageRepeatFirstTime > 3000000)) {
@@ -1660,6 +1669,7 @@ debug_debugger_running(void)
 void
 debug_puts(const char* string, int32 length)
 {
+	MutexLocker mutexLocker(sOutputLock);
 	InterruptsSpinLocker _(sSpinlock);
 	debug_output(string, length, true);
 }
@@ -1681,6 +1691,9 @@ debug_init(kernel_args* args)
 
 	debug_paranoia_init();
 	arch_debug_console_init(args);
+
+	if (frame_buffer_console_init(args) == B_OK && blue_screen_init_early() == B_OK)
+		sBlueScreenOutput = true;
 }
 
 
@@ -1707,7 +1720,7 @@ debug_init_post_vm(kernel_args* args)
 
 	debug_heap_init();
 	debug_variables_init();
-	frame_buffer_console_init(args);
+	frame_buffer_console_init_post_vm(args);
 	tracing_init();
 }
 
@@ -1727,7 +1740,7 @@ debug_init_post_settings(struct kernel_args* args)
 	sDebugScreenEnabled = get_safemode_boolean("debug_screen", false);
 
 	if ((sBlueScreenOutput || sDebugScreenEnabled)
-		&& blue_screen_init() != B_OK)
+			&& blue_screen_init() != B_OK)
 		sBlueScreenOutput = sDebugScreenEnabled = false;
 
 	if (sDebugScreenEnabled)
@@ -1802,7 +1815,7 @@ debug_trap_cpu_in_kdl(int32 cpu, bool returnIfHandedOver)
 	InterruptsLocker locker;
 
 	// return, if we've been called recursively (we call
-	// smp_intercpu_int_handler() below)
+	// smp_intercpu_interrupt_handler() below)
 	if (sCPUTrapped[cpu])
 		return;
 
@@ -1811,7 +1824,7 @@ debug_trap_cpu_in_kdl(int32 cpu, bool returnIfHandedOver)
 	sCPUTrapped[cpu] = true;
 
 	while (sInDebugger != 0) {
-		cpu_pause();
+		arch_debug_snooze(10000);
 
 		if (sHandOverKDL && sHandOverKDLToCPU == cpu) {
 			if (returnIfHandedOver)
@@ -1820,7 +1833,7 @@ debug_trap_cpu_in_kdl(int32 cpu, bool returnIfHandedOver)
 			kernel_debugger_internal(NULL, NULL,
 				sCurrentKernelDebuggerMessageArgs, cpu);
 		} else
-			smp_intercpu_int_handler(cpu);
+			smp_intercpu_interrupt_handler(cpu);
 	}
 
 	sCPUTrapped[cpu] = false;

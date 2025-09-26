@@ -854,6 +854,7 @@
 #define block_cache_get					fssh_block_cache_get
 #define block_cache_set_dirty			fssh_block_cache_set_dirty
 #define block_cache_put					fssh_block_cache_put
+#define block_cache_prefetch			fssh_block_cache_prefetch
 
 /* file cache */
 #define file_cache_create				fssh_file_cache_create
@@ -949,6 +950,7 @@
 #define get_vnode_removed			fssh_get_vnode_removed
 #define volume_for_vnode			fssh_volume_for_vnode
 #define check_access_permissions	fssh_check_access_permissions
+#define check_write_stat_permissions fssh_check_write_stat_permissions
 #define read_pages					fssh_read_pages
 #define write_pages					fssh_write_pages
 #define read_file_io_vec_pages		fssh_read_file_io_vec_pages
@@ -963,8 +965,9 @@
 #define notify_attribute_changed	fssh_notify_attribute_changed
 
 #define notify_query_entry_created	fssh_notify_query_entry_created
+#define notify_query_entry_moved	fssh_notify_query_entry_moved
 #define notify_query_entry_removed	fssh_notify_query_entry_removed
-#define notify_query_attr_changed	fssh_notify_query_attr_changed
+#define notify_query_attribute_changed	fssh_notify_query_attribute_changed
 
 
 ////////////////////////////////////////////////////////////////////////////////

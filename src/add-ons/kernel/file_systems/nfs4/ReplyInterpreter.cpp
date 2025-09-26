@@ -17,17 +17,6 @@
 #include "Cookie.h"
 
 
-#define ERROR(x...) dprintf("nfs4: " x)
-
-#ifdef DEBUG
-#define TRACE(x...) dprintf("nfs4: " x)
-#define CALLED() dprintf("nfs4: called %s", __func__)
-#else
-#define TRACE(x...)
-#define CALLED()
-#endif
-
-
 static status_t
 ProcessStream(RPC::Reply* reply, const char* callName)
 {
@@ -910,7 +899,13 @@ ReplyInterpreter::_OperationError(Opcode op)
 
 	status_t result = _NFS4ErrorToHaiku(fReply->Stream().GetUInt());
 	if (result != B_OK) {
+#if DEBUG
 		ERROR("NFS Error: %s\n", strerror(result));
+#else
+		// Lookup failures are routine. Reporting them could obscure more important error messages.
+		if (op != OpLookUp || result != B_ENTRY_NOT_FOUND)
+			ERROR("NFS Error: %s\n", strerror(result));
+#endif
 		fDecodeError = true;
 	}
 	return result;

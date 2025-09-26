@@ -120,7 +120,6 @@ static void arp_timer(struct net_timer *timer, void *data);
 net_buffer_module_info* gBufferModule;
 static net_stack_module_info* sStackModule;
 static net_datalink_module_info* sDatalinkModule;
-static mutex sCacheLock;
 static bool sIgnoreReplies;
 
 
@@ -152,6 +151,7 @@ struct arpHash {
 
 typedef BOpenHashTable<arpHash> AddressCache;
 static AddressCache* sCache;
+static mutex sCacheLock;
 
 
 #ifdef TRACE_ARP
@@ -960,6 +960,7 @@ arp_init()
 static status_t
 arp_uninit()
 {
+	ASSERT(sCache->IsEmpty());
 	unregister_generic_syscall(ARP_SYSCALLS, 1);
 	return B_OK;
 }

@@ -1,4 +1,4 @@
-1	friulian	x-vnd.Haiku-libbe	1445751563
+1	friulian	x-vnd.Haiku-libbe	310849835
 All Rights Reserved.	AboutWindow		Ducj i dirits riservâts.
 gold master	AboutWindow		gold master
 Undo	TextView		Disfe
@@ -24,7 +24,6 @@ Error	ZombieReplicantView		Erôr
 Paste	TextView		Tache
 OK	AboutWindow		Va ben
 %s MiB/s	StringForRate	units per second	%s MiB/s
-Special Thanks:	AboutWindow		Ringraciaments speciâi:
 %s TiB	StringForSize	size unit	%s TiB
 Default Haiku window decorator.	Default decorator about box		Decoradôr di barcons predefinît di Haiku.
 %s GiB	StringForSize	size unit	%s GiB
@@ -46,5 +45,6 @@ Version history:	AboutWindow		Cronologjie des versions:
 Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Impussibil individuâ la aplicazion pal replicant. Nissune firme di aplicazion furnide.\n%error
 %s KiB/s	StringForRate	units per second	%s KiB/s
 Blue:	ColorControl		Blu:
+Special thanks:	AboutWindow		Ringraciaments speciâi:
 Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Impussibil creâ il replicant par \"%description\".\n%error
 Written by:	AboutWindow		Scrit di:

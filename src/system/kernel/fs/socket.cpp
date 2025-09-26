@@ -358,7 +358,7 @@ get_socket_descriptor(int fd, bool kernel, file_descriptor*& descriptor)
 
 
 static int
-create_socket_fd(net_socket* socket, bool kernel)
+create_socket_fd(net_socket* socket, int flags, bool kernel)
 {
 	// Get the socket's non-blocking flag, so we can set the respective
 	// open mode flag.
@@ -368,6 +368,13 @@ create_socket_fd(net_socket* socket, bool kernel)
 		SO_NONBLOCK, &nonBlock, &nonBlockLen);
 	if (error != B_OK)
 		return error;
+	int oflags = 0;
+	if ((flags & SOCK_CLOEXEC) != 0)
+		oflags |= O_CLOEXEC;
+	if ((flags & SOCK_CLOFORK) != 0)
+		oflags |= O_CLOFORK;
+	if ((flags & SOCK_NONBLOCK) != 0 || nonBlock)
+		oflags |= O_NONBLOCK;
 
 	// allocate a file descriptor
 	file_descriptor* descriptor = alloc_fd();
@@ -377,14 +384,20 @@ create_socket_fd(net_socket* socket, bool kernel)
 	// init it
 	descriptor->ops = &sSocketFDOps;
 	descriptor->cookie = socket;
-	descriptor->open_mode = O_RDWR | (nonBlock ? O_NONBLOCK : 0);
+	descriptor->open_mode = O_RDWR | oflags;
 
 	// publish it
-	int fd = new_fd(get_current_io_context(kernel), descriptor);
+	io_context* context = get_current_io_context(kernel);
+	int fd = new_fd(context, descriptor);
 	if (fd < 0) {
 		descriptor->ops = NULL;
 		put_fd(descriptor);
 	}
+
+	rw_lock_write_lock(&context->lock);
+	fd_set_close_on_exec(context, fd, (oflags & O_CLOEXEC) != 0);
+	fd_set_close_on_fork(context, fd, (oflags & O_CLOFORK) != 0);
+	rw_lock_write_unlock(&context->lock);
 
 	return fd;
 }
@@ -399,6 +412,9 @@ common_socket(int family, int type, int protocol, bool kernel)
 	if (!get_stack_interface_module())
 		return B_UNSUPPORTED;
 
+	int sflags = type & (SOCK_CLOEXEC | SOCK_NONBLOCK | SOCK_CLOFORK);
+	type &= ~(SOCK_CLOEXEC | SOCK_NONBLOCK | SOCK_CLOFORK);
+
 	// create the socket
 	net_socket* socket;
 	status_t error = sStackInterface->open(family, type, protocol, &socket);
@@ -408,7 +424,7 @@ common_socket(int family, int type, int protocol, bool kernel)
 	}
 
 	// allocate the FD
-	int fd = create_socket_fd(socket, kernel);
+	int fd = create_socket_fd(socket, sflags, kernel);
 	if (fd < 0) {
 		sStackInterface->close(socket);
 		sStackInterface->free(socket);
@@ -437,6 +453,9 @@ common_shutdown(int fd, int how, bool kernel)
 	file_descriptor* descriptor;
 	GET_SOCKET_FD_OR_RETURN(fd, kernel, descriptor);
 	FileDescriptorPutter _(descriptor);
+
+	if (how < SHUT_RD || how > SHUT_RDWR)
+		return B_BAD_VALUE;
 
 	return sStackInterface->shutdown(FD_SOCKET(descriptor), how);
 }
@@ -467,12 +486,15 @@ common_listen(int fd, int backlog, bool kernel)
 
 
 static int
-common_accept(int fd, struct sockaddr *address, socklen_t *_addressLength,
+common_accept(int fd, struct sockaddr *address, socklen_t *_addressLength, int flags,
 	bool kernel)
 {
 	file_descriptor* descriptor;
 	GET_SOCKET_FD_OR_RETURN(fd, kernel, descriptor);
 	FileDescriptorPutter _(descriptor);
+
+	if ((flags & ~(SOCK_CLOEXEC | SOCK_NONBLOCK | SOCK_CLOFORK)) != 0)
+		RETURN_AND_SET_ERRNO(B_BAD_VALUE);
 
 	net_socket* acceptedSocket;
 	status_t error = sStackInterface->accept(FD_SOCKET(descriptor), address,
@@ -481,7 +503,7 @@ common_accept(int fd, struct sockaddr *address, socklen_t *_addressLength,
 		return error;
 
 	// allocate the FD
-	int acceptedFD = create_socket_fd(acceptedSocket, kernel);
+	int acceptedFD = create_socket_fd(acceptedSocket, flags, kernel);
 	if (acceptedFD < 0) {
 		sStackInterface->close(acceptedSocket);
 		sStackInterface->free(acceptedSocket);
@@ -633,6 +655,9 @@ common_socketpair(int family, int type, int protocol, int fds[2], bool kernel)
 	if (!get_stack_interface_module())
 		return B_UNSUPPORTED;
 
+	int sflags = type & (SOCK_CLOEXEC | SOCK_NONBLOCK | SOCK_CLOFORK);
+	type &= ~(SOCK_CLOEXEC | SOCK_NONBLOCK | SOCK_CLOFORK);
+
 	net_socket* sockets[2];
 	status_t error = sStackInterface->socketpair(family, type, protocol,
 		sockets);
@@ -643,7 +668,7 @@ common_socketpair(int family, int type, int protocol, int fds[2], bool kernel)
 
 	// allocate the FDs
 	for (int i = 0; i < 2; i++) {
-		fds[i] = create_socket_fd(sockets[i], kernel);
+		fds[i] = create_socket_fd(sockets[i], sflags, kernel);
 		if (fds[i] < 0) {
 			sStackInterface->close(sockets[i]);
 			sStackInterface->free(sockets[i]);
@@ -719,7 +744,15 @@ int
 accept(int socket, struct sockaddr *address, socklen_t *_addressLength)
 {
 	SyscallFlagUnsetter _;
-	RETURN_AND_SET_ERRNO(common_accept(socket, address, _addressLength, true));
+	RETURN_AND_SET_ERRNO(common_accept(socket, address, _addressLength, 0, true));
+}
+
+
+int
+accept4(int socket, struct sockaddr *address, socklen_t *_addressLength, int flags)
+{
+	SyscallFlagUnsetter _;
+	RETURN_AND_SET_ERRNO(common_accept(socket, address, _addressLength, flags, true));
 }
 
 
@@ -907,7 +940,7 @@ _user_listen(int socket, int backlog)
 
 int
 _user_accept(int socket, struct sockaddr *userAddress,
-	socklen_t *_addressLength)
+	socklen_t *_addressLength, int flags)
 {
 	// check parameters
 	socklen_t addressLength = 0;
@@ -922,7 +955,7 @@ _user_accept(int socket, struct sockaddr *userAddress,
 	char address[MAX_SOCKET_ADDRESS_LENGTH];
 	socklen_t userAddressBufferSize = addressLength;
 	result = common_accept(socket,
-		userAddress != NULL ? (sockaddr*)address : NULL, &addressLength, false);
+		userAddress != NULL ? (sockaddr*)address : NULL, &addressLength, flags, false);
 
 	// copy address size and address back to userland
 	if (copy_address_to_userland(address, addressLength, userAddress,
@@ -1056,7 +1089,7 @@ _user_sendto(int socket, const void *data, size_t length, int flags,
 	if (data == NULL || !is_user_address_range(data, length))
 		return B_BAD_ADDRESS;
 
-	if (addressLength <= 0
+	if (addressLength < 0
 			|| addressLength > MAX_SOCKET_ADDRESS_LENGTH) {
 		return B_BAD_VALUE;
 	}

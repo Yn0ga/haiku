@@ -265,9 +265,9 @@ standard_gcc_settings()
 {
 	local gcc="$1"
 
-	if which greadlink > /dev/null 2>&1; then
+	if command -v greadlink > /dev/null 2>&1; then
 		readlink="greadlink -e"
-	elif which realpath > /dev/null 2>&1; then
+	elif command -v realpath > /dev/null 2>&1; then
 		readlink=realpath
 	elif readlink -e / > /dev/null 2>&1; then
 		readlink="readlink -e"
@@ -422,7 +422,7 @@ get_build_tool_path()
 		path="`pwd`/`basename "$path"`"
 		cd $oldPwd
 	else
-		which "$path" > /dev/null 2>&1 || {
+		command -v "$path" > /dev/null 2>&1 || {
 			echo "Build tool \"$path\" not found (maybe specify it in $var?)" >&2
 			exit 1
 		}
@@ -603,9 +603,13 @@ if [ -z "$CC" ]; then
 	CC=gcc
 fi
 if [ $(is_legacy_gcc $($CC -dumpversion)) -ne 0 ]; then
-	echo The host tools cannot be built with a legacy version of GCC.
-	echo Please specify a more modern compiler in the "CC" environ.
-	exit 1
+	if [ $platform == "Haiku" ] && [ $platformMachine == "BePC" ]; then
+		CC=gcc-x86
+	else
+		echo The host tools cannot be built with a legacy version of GCC.
+		echo Please specify a more modern compiler in the "CC" environ.
+		exit 1
+	fi
 fi
 
 # detect the build platform
@@ -707,18 +711,18 @@ while [ $# -gt 0 ] ; do
 			HAIKU_PORTS="`absolute_path $4`"
 			HAIKU_IS_BOOTSTRAP=1
 			HAIKU_NO_DOWNLOADS=1
-			check_file_exists "$HOST_HAIKU_PORTER" || (
+			if ! check_file_exists "$HOST_HAIKU_PORTER"; then
 				echo "Invalid path to haikuporter: $HOST_HAIKU_PORTER" >&2
 				exit 1
-			)
-			check_dir_exists "$HAIKU_PORTS" || (
+			fi
+			if ! check_dir_exists "$HAIKU_PORTS"; then
 				echo "Non-existent directory $HAIKU_PORTS" >&2
 				exit 1
-			)
-			check_dir_exists "$HAIKU_PORTS_CROSS" || (
+			fi
+			if ! check_dir_exists "$HAIKU_PORTS_CROSS"; then
 				echo "Non-existent directory $HAIKU_PORTS_CROSS" >&2
 				exit 1
-			)
+			fi
 			shift 4
 			;;
 		--cross-tools-source)
@@ -886,7 +890,7 @@ if [ -z "$HOST_PYTHON" ]; then
 	elif python --version < /dev/null > /dev/null 2>&1; then
 		HOST_PYTHON="python"
 	else
-		echo "a python interpreter is required"
+		echo "Python interpreter not found (maybe specify one in HOST_PYTHON?)"
 		exit 1
 	fi
 fi
@@ -898,7 +902,7 @@ PYTHON_VERSION=$("$HOST_PYTHON" --version 2>&1 | sed -e 's/Python //')
 case $PYTHON_VERSION in
 	2.* | 3.[1-8].*)
 		echo "Python $PYTHON_VERSION is too old; need at least Python 3.9."
-		echo "(maybe specify a Python interpreter to use in HOST_PYTHON?)"
+		echo "(maybe specify a newer one in HOST_PYTHON?)"
 		exit 1
 		;;
 	*)

@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2023, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2021-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #include "IncrementViewCounterProcess.h"
@@ -7,6 +7,7 @@
 #include <Catalog.h>
 
 #include "Logger.h"
+#include "PackageUtils.h"
 #include "ServerHelper.h"
 #include "WebAppInterface.h"
 
@@ -19,14 +20,14 @@
 #define B_TRANSLATION_CONTEXT "IncrementViewCounterProcess"
 
 
-IncrementViewCounterProcess::IncrementViewCounterProcess(
-	Model* model, const PackageInfoRef& package)
+IncrementViewCounterProcess::IncrementViewCounterProcess(Model* model,
+	const PackageInfoRef& package)
 	:
 	fPackage(package),
 	fModel(model)
 {
 	fDescription = BString(B_TRANSLATE("Recording view of \"%PackageName%\""))
-		.ReplaceAll("%PackageName%", fPackage->Name());
+					   .ReplaceAll("%PackageName%", fPackage->Name());
 }
 
 
@@ -57,22 +58,17 @@ IncrementViewCounterProcess::RunInternal()
 		return B_OK;
 	}
 
-	if (!fPackage.IsSet()) {
-		HDERROR("the package is not present to increment the view counter");
-		return B_ERROR;
-	}
-
-	DepotInfoRef depot = fModel->DepotForName(fPackage->DepotName());
+	BString depotName = PackageUtils::DepotName(fPackage);
+	DepotInfoRef depot = fModel->DepotForName(depotName);
 
 	if (!depot.IsSet()) {
-		HDERROR("the package's depot is not present to increment the view "
-			"counter");
+		HDERROR("the package's depot is not present to increment the view counter");
 		return B_ERROR;
 	}
 
 	if (depot->WebAppRepositorySourceCode().IsEmpty()) {
-		HDERROR("cannot increment view counter because depot has no web app "
-			"repository source code");
+		HDERROR(
+			"cannot increment view counter because depot has no web app repository source code");
 		return B_BAD_DATA;
 	}
 
@@ -81,15 +77,14 @@ IncrementViewCounterProcess::RunInternal()
 
 	while (attempts > 0 && !WasStopped()) {
 		BMessage resultEnvelope;
-		WebAppInterface* webAppInterface = fModel->GetWebAppInterface();
-		result = webAppInterface->IncrementViewCounter(fPackage, depot, resultEnvelope);
+		WebAppInterfaceRef webApp = fModel->WebApp();
+		result = webApp->IncrementViewCounter(fPackage, depot, resultEnvelope);
 
 		if (result == B_OK) {
 			int32 errorCode = WebAppInterface::ErrorCodeFromResponse(resultEnvelope);
 			switch (errorCode) {
 				case ERROR_CODE_NONE:
-					HDINFO("did increment the view counter for [%s]",
-						fPackage->Name().String());
+					HDINFO("did increment the view counter for [%s]", fPackage->Name().String());
 					return result;
 				case ERROR_CODE_OBJECTNOTFOUND:
 					HDINFO("server was not able to find the package [%s]",
@@ -97,13 +92,14 @@ IncrementViewCounterProcess::RunInternal()
 					return B_NAME_NOT_FOUND;
 				default:
 					HDERROR("a problem has arisen incrementing the view "
-					"counter for pkg [%s] w/ error code %" B_PRId32,
-					fPackage->Name().String(), errorCode);
+							"counter for pkg [%s] w/ error code %" B_PRId32,
+						fPackage->Name().String(), errorCode);
 					result = B_ERROR;
 					break;
 			}
-		} else
+		} else {
 			HDERROR("an error has arisen incrementing the view counter");
+		}
 
 		attempts--;
 		_SpinBetweenAttempts();
@@ -120,4 +116,3 @@ IncrementViewCounterProcess::_SpinBetweenAttempts()
 	for (int32 i = 0; i < 10 && !WasStopped(); i++)
 		usleep(miniSpinDelays);
 }
-

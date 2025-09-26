@@ -1,4 +1,4 @@
-1	spanish; castilian	x-vnd.Haiku-libbe	1445751563
+1	spanish; castilian	x-vnd.Haiku-libbe	310849835
 All Rights Reserved.	AboutWindow		Todos los derechos reservados.
 gold master	AboutWindow		maestro dorado
 Undo	TextView		Deshacer
@@ -24,7 +24,6 @@ Error	ZombieReplicantView		Error
 Paste	TextView		Pegar
 OK	AboutWindow		Aceptar
 %s MiB/s	StringForRate	units per second	%s MiB/s
-Special Thanks:	AboutWindow		Agradecimientos especiales:
 %s TiB	StringForSize	size unit	%s TiB
 Default Haiku window decorator.	Default decorator about box		Decorador de ventana predeterminado de Haiku.
 %s GiB	StringForSize	size unit	%s GiB
@@ -46,5 +45,6 @@ Version history:	AboutWindow		Historal de versión:
 Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		No se puede localizar la aplicación para el replicante. Ninguna firma de aplicación se proporcionó:\n%error
 %s KiB/s	StringForRate	units per second	%s KiB/s
 Blue:	ColorControl		Azul:
+Special thanks:	AboutWindow		Agradecimientos especiales:
 Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		No se puede crear el replicante para \"%description\".\n%error
 Written by:	AboutWindow		Escrito por:

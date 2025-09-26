@@ -164,9 +164,13 @@ packagefs_lookup(fs_volume* fsVolume, fs_vnode* fsDir, const char* entryName,
 
 	// resolve ".."
 	if (strcmp(entryName, "..") == 0) {
-		Node* parent;
-		*_vnid = dir->GetParentUnchecked()->ID();
-		return volume->GetVNode(*_vnid, parent);
+		BReference<Directory> parent = dir->GetParent();
+		if (parent == NULL)
+			return B_ENTRY_NOT_FOUND;
+
+		Node* dummy;
+		*_vnid = parent->ID();
+		return volume->GetVNode(*_vnid, dummy);
 	}
 
 	// resolve normal entries -- look up the node
@@ -419,6 +423,8 @@ packagefs_open(fs_volume* fsVolume, fs_vnode* fsNode, int openMode,
 	// check the open mode and permissions
 	if (S_ISDIR(node->Mode()) && (openMode & O_RWMASK) != O_RDONLY)
 		return B_IS_A_DIRECTORY;
+	if ((openMode & O_DIRECTORY) != 0 && !S_ISDIR(node->Mode()))
+		return B_NOT_A_DIRECTORY;
 
 	if ((openMode & O_RWMASK) != O_RDONLY)
 		return B_NOT_ALLOWED;
@@ -1144,15 +1150,16 @@ packagefs_std_ops(int32 op, ...)
 				return error;
 			}
 
-			PackageFileHeapAccessorBase::sChunkCache =
-				create_object_cache_etc("pkgfs heap buffers",
-					PackageFileHeapAccessorBase::kChunkSize, sizeof(void*),
-					0, /* magazine capacity, count */ 2, 1,
-					0, NULL, NULL, NULL, NULL);
+			object_cache* quadChunkCache;
+			PackageFileHeapAccessorBase::sQuadChunkCache = quadChunkCache =
+				create_object_cache("pkgfs heap buffers",
+					PackageFileHeapAccessorBase::kChunkSize * 4,
+					0);
+			object_cache_set_minimum_reserve(quadChunkCache, 1);
+
 			TwoKeyAVLTreeNode<void*>::sNodeCache =
-				create_object_cache_etc("pkgfs TKAVLTreeNodes",
-					sizeof(TwoKeyAVLTreeNode<void*>), 8,
-					0, 0, 0, CACHE_NO_DEPOT, NULL, NULL, NULL, NULL);
+				create_object_cache("pkgfs TKAVLTreeNodes",
+					sizeof(TwoKeyAVLTreeNode<void*>), CACHE_NO_DEPOT);
 
 			error = PackageFSRoot::GlobalInit();
 			if (error != B_OK) {
@@ -1172,7 +1179,7 @@ packagefs_std_ops(int32 op, ...)
 			PackageFSRoot::GlobalUninit();
 			delete_object_cache(TwoKeyAVLTreeNode<void*>::sNodeCache);
 			delete_object_cache((object_cache*)
-				PackageFileHeapAccessorBase::sChunkCache);
+				PackageFileHeapAccessorBase::sQuadChunkCache);
 			StringConstants::Cleanup();
 			StringPool::Cleanup();
 			exit_debugging();

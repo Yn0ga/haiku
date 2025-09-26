@@ -113,6 +113,7 @@ iterative_io_finished_hook(void* cookie, io_request* request, status_t status,
 {
 	Inode* inode = (Inode*)cookie;
 	rw_lock_read_unlock(&inode->Lock());
+	put_vnode(inode->GetVolume()->FSVolume(), inode->ID());
 	return B_OK;
 }
 
@@ -522,6 +523,12 @@ bfs_io(fs_volume* _volume, fs_vnode* _node, void* _cookie, io_request* request)
 	// We lock the node here and will unlock it in the "finished" hook.
 	rw_lock_read_lock(&inode->Lock());
 
+	// Due to how I/O request notifications work, it is possible that
+	// some other thread could be notified that the request completed
+	// before we have a chance to release the read lock. We thus need
+	// our own reference to the vnode.
+	acquire_vnode(_volume, inode->ID());
+
 	return do_iterative_fd_io(volume->Device(), request,
 		iterative_io_get_vecs_hook, iterative_io_finished_hook, inode);
 }
@@ -842,7 +849,7 @@ bfs_set_flags(fs_volume* _volume, fs_vnode* _node, void* _cookie, int flags)
 
 
 static status_t
-bfs_fsync(fs_volume* _volume, fs_vnode* _node)
+bfs_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	FUNCTION();
 
@@ -879,13 +886,13 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 
 	bfs_inode& node = inode->Node();
 	bool updateTime = false;
-	uid_t uid = geteuid();
-
-	bool isOwnerOrRoot = uid == 0 || uid == (uid_t)node.UserID();
-	bool hasWriteAccess = inode->CheckPermissions(W_OK) == B_OK;
 
 	Transaction transaction(volume, inode->BlockNumber());
 	inode->WriteLockInTransaction(transaction);
+
+	if (check_write_stat_permissions(node.GroupID(), node.UserID(), node.Mode(),
+			mask, stat) != B_OK)
+		RETURN_ERROR(B_NOT_ALLOWED);
 
 	if ((mask & B_STAT_SIZE) != 0 && inode->Size() != stat->st_size) {
 		// Since B_STAT_SIZE is the only thing that can fail directly, we
@@ -895,8 +902,6 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 			return B_IS_A_DIRECTORY;
 		if (!inode->IsFile())
 			return B_BAD_VALUE;
-		if (!hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 
 		off_t oldSize = inode->Size();
 
@@ -922,25 +927,16 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 	}
 
 	if ((mask & B_STAT_UID) != 0) {
-		// only root should be allowed
-		if (uid != 0)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.uid = HOST_ENDIAN_TO_BFS_INT32(stat->st_uid);
 		updateTime = true;
 	}
 
 	if ((mask & B_STAT_GID) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.gid = HOST_ENDIAN_TO_BFS_INT32(stat->st_gid);
 		updateTime = true;
 	}
 
 	if ((mask & B_STAT_MODE) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		PRINT(("original mode = %u, stat->st_mode = %u\n",
 			(unsigned int)node.Mode(), (unsigned int)stat->st_mode));
 		node.mode = HOST_ENDIAN_TO_BFS_INT32((node.Mode() & ~S_IUMSK)
@@ -949,17 +945,11 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 	}
 
 	if ((mask & B_STAT_CREATION_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.create_time
 			= HOST_ENDIAN_TO_BFS_INT64(bfs_inode::ToInode(stat->st_crtim));
 	}
 
 	if ((mask & B_STAT_MODIFICATION_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		if (!inode->InLastModifiedIndex()) {
 			// directory modification times are not part of the index
 			node.last_modified_time
@@ -973,9 +963,6 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 	}
 
 	if ((mask & B_STAT_CHANGE_TIME) != 0 || updateTime) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		bigtime_t newTime;
 		if ((mask & B_STAT_CHANGE_TIME) == 0)
 			newTime = bfs_inode::ToInode(real_time_clock_usecs());
@@ -1292,7 +1279,8 @@ bfs_rename(fs_volume* _volume, fs_vnode* _oldDir, const char* oldName,
 		status = inode->SetName(transaction, newName);
 		if (status == B_OK) {
 			Index index(volume);
-			index.UpdateName(transaction, oldName, newName, inode);
+			index.UpdateName(transaction, oldName, newName, inode,
+				false /* we already updated live queries, above */);
 		}
 	}
 
@@ -1361,8 +1349,7 @@ bfs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 	if ((openMode & O_DIRECTORY) != 0 && !inode->IsDirectory())
 		return B_NOT_A_DIRECTORY;
 
-	status_t status = inode->CheckPermissions(open_mode_to_access(openMode)
-		| ((openMode & O_TRUNC) != 0 ? W_OK : 0));
+	status_t status = inode->CheckPermissions(open_mode_to_access(openMode));
 	if (status != B_OK)
 		RETURN_ERROR(status);
 

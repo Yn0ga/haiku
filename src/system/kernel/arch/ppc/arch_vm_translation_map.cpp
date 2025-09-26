@@ -81,7 +81,7 @@
 #include <arch/cpu.h>
 //#include <arch_mmu.h>
 #include <boot/kernel_args.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <slab/Slab.h>
 #include <vm/vm.h>
@@ -283,12 +283,12 @@ arch_vm_translation_map_init_post_sem(kernel_args *args)
 
 status_t
 arch_vm_translation_map_early_map(kernel_args *args, addr_t va, phys_addr_t pa,
-	uint8 attributes, phys_addr_t (*get_free_page)(kernel_args *))
+	uint8 attributes)
 {
 	TRACE("early_tmap: entry pa %#" B_PRIxPHYSADDR " va %#" B_PRIxADDR "\n", pa,
 		va);
 
-	return gPPCPagingMethod->MapEarly(args, va, pa, attributes, get_free_page);
+	return gPPCPagingMethod->MapEarly(args, va, pa, attributes);
 }
 
 

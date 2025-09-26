@@ -18,12 +18,14 @@
 
 #include <OS.h>
 
+#include <commpage_defs.h>
 #include <syscalls.h>
 #include <util/kernel_cpp.h>
 
 #include <locks.h>
 
 #include "add_ons.h"
+#include "commpage.h"
 #include "elf_load_image.h"
 #include "elf_symbol_lookup.h"
 #include "elf_tls.h"
@@ -651,18 +653,12 @@ load_library(char const *path, uint32 flags, bool addOn, void* caller,
 				path, image->id);
 			*_handle = image;
 			return image->id;
+		} else if ((flags & RTLD_NOLOAD) != 0) {
+			return B_NAME_NOT_FOUND;
 		}
 
 		// First of all, find the caller image.
-		image_t* callerImage = get_loaded_images().head;
-		for (; callerImage != NULL; callerImage = callerImage->next) {
-			elf_region_t& text = callerImage->regions[0];
-			if ((addr_t)caller >= text.vmstart
-				&& (addr_t)caller < text.vmstart + text.vmsize) {
-				// found the image
-				break;
-			}
-		}
+		image_t* callerImage = find_loaded_image_by_address((addr_t)caller);
 		if (callerImage != NULL) {
 			runpath = find_dt_runpath(callerImage);
 			if (runpath == NULL)
@@ -681,6 +677,8 @@ load_library(char const *path, uint32 flags, bool addOn, void* caller,
 	if (image->find_undefined_symbol == NULL) {
 		if (addOn)
 			image->find_undefined_symbol = find_undefined_symbol_add_on;
+		else if (flags & RTLD_GROUP)
+			image->find_undefined_symbol = find_undefined_symbol_dependencies_only;
 		else
 			image->find_undefined_symbol = find_undefined_symbol_global;
 	}
@@ -774,8 +772,10 @@ unload_library(void* handle, image_id imageID, bool addOn)
 			// call_atexit_hooks_for_range() only here, which happens only when
 			// libraries are unloaded dynamically.
 			if (gRuntimeLoader.call_atexit_hooks_for_range != NULL) {
-				gRuntimeLoader.call_atexit_hooks_for_range(
-					image->regions[0].vmstart, image->regions[0].vmsize);
+				for (uint32 i = 0; i < image->num_regions; i++) {
+					gRuntimeLoader.call_atexit_hooks_for_range(
+						image->regions[i].vmstart, image->regions[i].vmsize);
+				}
 			}
 
 			image_event(image, IMAGE_EVENT_UNINITIALIZING);
@@ -859,8 +859,18 @@ get_nearest_symbol_at_address(void* address, image_id* _imageID,
 	RecursiveLocker _(sLock);
 
 	image_t* image = find_loaded_image_by_address((addr_t)address);
-	if (image == NULL)
+	if (image == NULL) {
+		addr_t commpageBegin = (addr_t)__gCommPageAddress;
+		addr_t commpageEnd = (addr_t)commpageBegin + COMMPAGE_SIZE;
+
+		// The caller may be looking for a commpage symbol.
+		if ((addr_t)address >= commpageBegin && (addr_t)address < commpageEnd) {
+			return get_nearest_commpage_symbol_at_address_locked(address, _imageID, _imagePath,
+				_imageName, _symbolName, _type, _location, _exactMatch);
+		}
+
 		return B_BAD_VALUE;
+	}
 
 	if (_imageID != NULL)
 		*_imageID = image->id;
@@ -1006,16 +1016,7 @@ get_library_symbol(void* handle, void* caller, const char* symbolName,
 		// calling image. Return the next after the caller symbol.
 
 		// First of all, find the caller image.
-		image_t* callerImage = get_loaded_images().head;
-		for (; callerImage != NULL; callerImage = callerImage->next) {
-			elf_region_t& text = callerImage->regions[0];
-			if ((addr_t)caller >= text.vmstart
-				&& (addr_t)caller < text.vmstart + text.vmsize) {
-				// found the image
-				break;
-			}
-		}
-
+		image_t* callerImage = find_loaded_image_by_address((addr_t)caller);
 		if (callerImage != NULL) {
 			// found the caller -- now search the global scope until we find
 			// the next symbol
@@ -1210,7 +1211,7 @@ rldelf_init(void)
 		runtime_loader_debug_area *area;
 		area_id areaID = _kern_create_area(RUNTIME_LOADER_DEBUG_AREA_NAME,
 			(void **)&area, B_RANDOMIZED_ANY_ADDRESS, size, B_NO_LOCK,
-			B_READ_AREA | B_WRITE_AREA | B_CLONEABLE_AREA);
+			B_READ_AREA | B_WRITE_AREA);
 		if (areaID < B_OK) {
 			FATAL("Failed to create debug area.\n");
 			_kern_loading_app_failed(areaID);

@@ -96,13 +96,11 @@ StdBinCommands
 	modifiers.cpp
 	mvattr.cpp
 	pidof.cpp
-	query.cpp
 	quit.cpp
 	roster.cpp
 	setversion.cpp
 	trash.cpp
 	version.cpp
-	waitfor.cpp
 	WindowShade.cpp
 	: be : $(haiku-utils_rsrc) ;
 
@@ -143,6 +141,7 @@ StdBinCommands
 # standard commands that need libbe.so, libbnetapi.so, libsupc++.so
 StdBinCommands
 	open.cpp
+	waitfor.cpp
 	: be bnetapi [ TargetLibsupc++ ] : $(haiku-utils_rsrc) ;
 
 # commands that need libbe.so, libsupc++.so and the stub catalog
@@ -270,6 +269,7 @@ SubInclude HAIKU_TOP src bin package_repo ;
 SubInclude HAIKU_TOP src bin pc ;
 SubInclude HAIKU_TOP src bin pcmcia-cs ;
 SubInclude HAIKU_TOP src bin pkgman ;
+SubInclude HAIKU_TOP src bin query ;
 SubInclude HAIKU_TOP src bin rc ;
 SubInclude HAIKU_TOP src bin screen_blanker ;
 SubInclude HAIKU_TOP src bin screenmode ;
@@ -280,6 +280,3 @@ SubInclude HAIKU_TOP src bin debug ;
 
 # Network command line tools
 SubInclude HAIKU_TOP src bin network ;
-
-# Other stuff
-SubInclude HAIKU_TOP src bin filteredquery ;

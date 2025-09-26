@@ -15,6 +15,7 @@
    License along with the GNU C Library; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#include <stdlib.h>
 #include <stdio_ext.h>
 #include "libioP.h"
 
@@ -39,11 +40,18 @@ __fpurge (FILE *fp)
       fp->_IO_read_end = fp->_IO_read_ptr;
       fp->_IO_write_ptr = fp->_IO_write_base;
     }
+
+  /* Avoid memory leak when there is an active ungetc buffer.  */
+  if (fp->_IO_save_base != NULL)
+    {
+      free (fp->_IO_save_base);
+      fp->_IO_save_base = NULL;
+    }
 }
 
 int
 fpurge(FILE* stream)
 {
-	__fpurge(stream);
-	return 0;
+  __fpurge(stream);
+  return 0;
 }

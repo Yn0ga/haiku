@@ -1,5 +1,5 @@
 /*
- * Copyright 2022, Haiku. All rights reserved.
+ * Copyright 2022-2025 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef THEME_VIEW_H
@@ -8,6 +8,7 @@
 
 #include <Button.h>
 #include <ColorControl.h>
+#include <ColorPreview.h>
 #include <GroupView.h>
 #include <ListItem.h>
 #include <ListView.h>
@@ -27,18 +28,17 @@
 #include "Colors.h"
 
 
+using BPrivate::BColorPreview;
+
+
 static const uint32 MSG_COLOR_SCHEME_CHANGED 	= 'mccs';
-static const uint32 MSG_SET_CURRENT_COLOR	 	= 'sccl';
 static const uint32 MSG_UPDATE_COLOR		 	= 'upcl';
 static const uint32 MSG_COLOR_ATTRIBUTE_CHOSEN	= 'atch';
 static const uint32 MSG_THEME_MODIFIED			= 'tmdf';
-static const uint32 MSG_SET_COLOR = 'sclr';
 
-static const char* const kRGBColor = "RGBColor";
-static const char* const kName = "name";
 
 class ThemeWindow;
-class ColorPreview;
+class BColorPreview;
 class BMenu;
 class BMenuField;
 class BPopUpMenu;
@@ -63,7 +63,7 @@ private:
 			void				_ChangeColorScheme(color_scheme* scheme);
 			void				_SetCurrentColorScheme();
 			void				_SetCurrentColor(rgb_color color);
-			void				_SetColor(const char* name, rgb_color color);
+			void				_SetColor(int32 index, rgb_color color);
 
 			void				_MakeColorSchemeMenu();
 			void				_MakeColorSchemeMenuItem(const color_scheme *item);
@@ -73,7 +73,7 @@ private:
 			BListView*			fAttrList;
 			const char*			fName;
 			BScrollView*		fScrollView;
-			ColorPreview*		fColorPreview;
+			BColorPreview*		fColorPreview;
 			BMenuField*			fColorSchemeField;
 			BPopUpMenu*			fColorSchemeMenu;
 			BTextView*			fPreview;

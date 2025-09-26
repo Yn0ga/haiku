@@ -32,7 +32,7 @@
 #include <boot/kernel_args.h>
 #include <condition_variable.h>
 #include <cpu.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kimage.h>
 #include <kscheduler.h>
 #include <ksignal.h>
@@ -154,6 +154,101 @@ static ThreadNotificationService sNotificationService;
 static object_cache* sThreadCache;
 
 
+// #pragma mark - kernel stack cache
+
+
+struct CachedKernelStack : public DoublyLinkedListLinkImpl<CachedKernelStack> {
+	VMArea* area;
+	addr_t base;
+	addr_t top;
+};
+
+
+static spinlock sCachedKernelStacksLock = B_SPINLOCK_INITIALIZER;
+static DoublyLinkedList<CachedKernelStack> sCachedKernelStacks;
+
+
+static area_id
+allocate_kernel_stack(const char* name, addr_t* base, addr_t* top)
+{
+	InterruptsSpinLocker locker(sCachedKernelStacksLock);
+	CachedKernelStack* cachedStack = sCachedKernelStacks.RemoveHead();
+	locker.Unlock();
+
+	if (cachedStack == NULL) {
+		panic("out of cached stacks!");
+		return B_NO_MEMORY;
+	}
+
+	memcpy(cachedStack->area->name, name, B_OS_NAME_LENGTH);
+
+	*base = cachedStack->base;
+	*top = cachedStack->top;
+
+	return cachedStack->area->id;
+}
+
+
+static void
+free_kernel_stack(area_id areaID, addr_t base, addr_t top)
+{
+#if defined(STACK_GROWS_DOWNWARDS)
+	const addr_t stackStart = base + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE;
+#else
+	const addr_t stackStart = base;
+#endif
+
+	CachedKernelStack* cachedStack = (CachedKernelStack*)stackStart;
+	cachedStack->area = VMAreas::Lookup(areaID);
+	cachedStack->base = base;
+	cachedStack->top = top;
+
+	strcpy(cachedStack->area->name, "cached kstack");
+
+	InterruptsSpinLocker locker(sCachedKernelStacksLock);
+	sCachedKernelStacks.Add(cachedStack);
+}
+
+
+static status_t
+create_kernel_stack(void* cookie, void* object)
+{
+	// We could theoretically cast the passed object to Thread* and assign
+	// the kstack to it directly, but this would be incompatible with the
+	// debug filling of blocks on allocate/free. It also is probably good
+	// to not reuse kstacks quite so rapidly, anyway.
+
+	virtual_address_restrictions virtualRestrictions = {};
+	virtualRestrictions.address_specification = B_ANY_KERNEL_ADDRESS;
+	physical_address_restrictions physicalRestrictions = {};
+
+	addr_t base;
+	area_id area = create_area_etc(B_SYSTEM_TEAM, "",
+		KERNEL_STACK_SIZE + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE,
+		B_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA
+			| B_KERNEL_STACK_AREA, 0, KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE,
+		&virtualRestrictions, &physicalRestrictions, (void**)&base);
+	if (area < 0)
+		return area;
+
+	addr_t top = base + KERNEL_STACK_SIZE
+		+ KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE;
+	free_kernel_stack(area, base, top);
+	return B_OK;
+}
+
+
+static void
+destroy_kernel_stack(void* cookie, void* object)
+{
+	InterruptsSpinLocker locker(sCachedKernelStacksLock);
+	CachedKernelStack* cachedStack = sCachedKernelStacks.RemoveHead();
+	locker.Unlock();
+
+	delete_area(cachedStack->area->id);
+}
+
+
 // #pragma mark - Thread
 
 
@@ -169,7 +264,6 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	flags(0),
 	serial_number(-1),
 	hash_next(NULL),
-	team_next(NULL),
 	priority(-1),
 	io_priority(-1),
 	cpu(cpu),
@@ -187,6 +281,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	user_thread(NULL),
 	fault_handler(0),
 	page_faults_allowed(1),
+	page_fault_waits_allowed(1),
 	team(NULL),
 	select_infos(NULL),
 	kernel_stack_area(-1),
@@ -222,8 +317,6 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 
 	exit.status = 0;
 
-	list_init(&exit.waiters);
-
 	exit.sem = -1;
 	msg.write_sem = -1;
 	msg.read_sem = -1;
@@ -247,7 +340,7 @@ Thread::~Thread()
 	// delete the resources, that may remain in either case
 
 	if (kernel_stack_area >= 0)
-		delete_area(kernel_stack_area);
+		free_kernel_stack(kernel_stack_area, kernel_stack_base, kernel_stack_top);
 
 	fPendingSignals.Clear();
 
@@ -289,6 +382,12 @@ Thread::Create(const char* name, Thread*& _thread)
 /*static*/ Thread*
 Thread::Get(thread_id id)
 {
+	if (id == thread_get_current_thread_id()) {
+		Thread* thread = thread_get_current_thread();
+		thread->AcquireReference();
+		return thread;
+	}
+
 	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	Thread* thread = sThreadHash.Lookup(id);
 	if (thread != NULL)
@@ -300,6 +399,13 @@ Thread::Get(thread_id id)
 /*static*/ Thread*
 Thread::GetAndLock(thread_id id)
 {
+	if (id == thread_get_current_thread_id()) {
+		Thread* thread = thread_get_current_thread();
+		thread->AcquireReference();
+		thread->Lock();
+		return thread;
+	}
+
 	// look it up and acquire a reference
 	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	Thread* thread = sThreadHash.Lookup(id);
@@ -600,8 +706,7 @@ ThreadCreationAttributes::InitFromUserAttributes(
 static void
 insert_thread_into_team(Team *team, Thread *thread)
 {
-	thread->team_next = team->thread_list;
-	team->thread_list = thread;
+	team->thread_list.Add(thread, false);
 	team->num_threads++;
 
 	if (team->num_threads == 1) {
@@ -619,20 +724,8 @@ insert_thread_into_team(Team *team, Thread *thread)
 static void
 remove_thread_from_team(Team *team, Thread *thread)
 {
-	Thread *temp, *last = NULL;
-
-	for (temp = team->thread_list; temp != NULL; temp = temp->team_next) {
-		if (temp == thread) {
-			if (last == NULL)
-				team->thread_list = temp->team_next;
-			else
-				last->team_next = temp->team_next;
-
-			team->num_threads--;
-			break;
-		}
-		last = temp;
-	}
+	team->thread_list.Remove(thread);
+	team->num_threads--;
 }
 
 
@@ -930,17 +1023,9 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 	char stackName[B_OS_NAME_LENGTH];
 	snprintf(stackName, B_OS_NAME_LENGTH, "%s_%" B_PRId32 "_kstack",
 		thread->name, thread->id);
-	virtual_address_restrictions virtualRestrictions = {};
-	virtualRestrictions.address_specification = B_ANY_KERNEL_ADDRESS;
-	physical_address_restrictions physicalRestrictions = {};
 
-	thread->kernel_stack_area = create_area_etc(B_SYSTEM_TEAM, stackName,
-		KERNEL_STACK_SIZE + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE,
-		B_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA
-			| B_KERNEL_STACK_AREA, 0, KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE,
-		&virtualRestrictions, &physicalRestrictions,
-		(void**)&thread->kernel_stack_base);
-
+	thread->kernel_stack_area = allocate_kernel_stack(stackName,
+		&thread->kernel_stack_base, &thread->kernel_stack_top);
 	if (thread->kernel_stack_area < 0) {
 		// we're not yet part of a team, so we can just bail out
 		status = thread->kernel_stack_area;
@@ -950,9 +1035,6 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 
 		return status;
 	}
-
-	thread->kernel_stack_top = thread->kernel_stack_base + KERNEL_STACK_SIZE
-		+ KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE;
 
 	if (kernel) {
 		// Init the thread's kernel stack. It will start executing
@@ -1711,7 +1793,7 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 				case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
 				{
 					char name[5];
-					ssize_t length = debug_condition_variable_type_strlcpy(
+					ssize_t length = ConditionVariable::DebugGetType(
 						(ConditionVariable*)thread->wait.object, name, sizeof(name));
 					if (length > 0)
 						kprintf("cvar:%*s %p   ", 4, name, thread->wait.object);
@@ -1769,15 +1851,13 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 
 	// print the long info
 
-	struct thread_death_entry *death = NULL;
-
 	kprintf("THREAD: %p\n", thread);
 	kprintf("id:                 %" B_PRId32 " (%#" B_PRIx32 ")\n", thread->id,
 		thread->id);
 	kprintf("serial_number:      %" B_PRId64 "\n", thread->serial_number);
 	kprintf("name:               \"%s\"\n", thread->name);
 	kprintf("hash_next:          %p\nteam_next:          %p\n",
-		thread->hash_next, thread->team_next);
+		thread->hash_next, thread->team_link.next);
 	kprintf("priority:           %" B_PRId32 " (I/O: %" B_PRId32 ")\n",
 		thread->priority, thread->io_priority);
 	kprintf("state:              %s\n", state_to_text(thread, thread->state));
@@ -1853,8 +1933,8 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 	kprintf("  exit.status:      %#" B_PRIx32 " (%s)\n", thread->exit.status,
 		strerror(thread->exit.status));
 	kprintf("  exit.waiters:\n");
-	while ((death = (struct thread_death_entry*)list_get_next_item(
-			&thread->exit.waiters, death)) != NULL) {
+	for (thread_death_entry* death = thread->exit.waiters.First(); death != NULL;
+			death = thread->exit.waiters.GetNext(death)) {
 		kprintf("\t%p (thread %" B_PRId32 ")\n", death, death->thread);
 	}
 
@@ -2189,13 +2269,17 @@ thread_exit(void)
 		} else {
 			// The thread is not the main thread. We store a thread death entry
 			// for it, unless someone is already waiting for it.
-			if (threadDeathEntry != NULL
-				&& list_is_empty(&thread->exit.waiters)) {
-				threadDeathEntry->thread = thread->id;
-				threadDeathEntry->status = thread->exit.status;
+			if (threadDeathEntry != NULL) {
+				if (thread->exit.waiters.IsEmpty()) {
+					threadDeathEntry->thread = thread->id;
+					threadDeathEntry->status = thread->exit.status;
 
-				// add entry to dead thread list
-				list_add_item(&team->dead_threads, threadDeathEntry);
+					// add entry to dead thread list
+					team->dead_threads.Add(threadDeathEntry);
+				} else {
+					deferred_free(threadDeathEntry);
+					threadDeathEntry = NULL;
+				}
 			}
 
 			threadCreationLocker.Unlock();
@@ -2288,9 +2372,8 @@ thread_exit(void)
 		thread->exit.sem = -1;
 
 		// fill all death entries
-		thread_death_entry* entry = NULL;
-		while ((entry = (thread_death_entry*)list_get_next_item(
-				&thread->exit.waiters, entry)) != NULL) {
+		for (thread_death_entry* entry = thread->exit.waiters.First(); entry != NULL;
+				entry = thread->exit.waiters.GetNext(entry)) {
 			entry->status = thread->exit.status;
 		}
 
@@ -2528,7 +2611,7 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		// remember the semaphore we have to wait on and place our death entry
 		exitSem = thread->exit.sem;
 		if (exitSem >= 0)
-			list_add_link_to_head(&thread->exit.waiters, &death);
+			thread->exit.waiters.Add(&death, false);
 
 		thread->UnlockAndReleaseReference();
 
@@ -2552,10 +2635,10 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		} else {
 			// check the thread death entries of the team (non-main threads)
 			thread_death_entry* threadDeathEntry = NULL;
-			while ((threadDeathEntry = (thread_death_entry*)list_get_next_item(
-					&team->dead_threads, threadDeathEntry)) != NULL) {
+			for (threadDeathEntry = team->dead_threads.First(); threadDeathEntry != NULL;
+					threadDeathEntry = team->dead_threads.GetNext(threadDeathEntry)) {
 				if (threadDeathEntry->thread == id) {
-					list_remove_item(&team->dead_threads, threadDeathEntry);
+					team->dead_threads.Remove(threadDeathEntry);
 					death.status = threadDeathEntry->status;
 					free(threadDeathEntry);
 					break;
@@ -2591,7 +2674,7 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		// remove our death entry now.
 		thread = Thread::GetAndLock(id);
 		if (thread != NULL) {
-			list_remove_link(&death);
+			thread->exit.waiters.Remove(&death);
 			thread->UnlockAndReleaseReference();
 		} else {
 			// The thread is already gone, so we need to wait uninterruptibly
@@ -2730,8 +2813,8 @@ thread_init(kernel_args *args)
 		panic("thread_init(): failed to init thread hash table!");
 
 	// create the thread structure object cache
-	sThreadCache = create_object_cache("threads", sizeof(Thread), 64, NULL,
-		NULL, NULL);
+	sThreadCache = create_object_cache_etc("threads", sizeof(Thread), 64,
+		0, 0, 0, 0, NULL, create_kernel_stack, destroy_kernel_stack, NULL);
 		// Note: The x86 port requires 64 byte alignment of thread structures.
 	if (sThreadCache == NULL)
 		panic("thread_init(): failed to allocate thread object cache!");
@@ -3235,19 +3318,33 @@ _get_next_thread_info(team_id teamID, int32 *_cookie, thread_info *info,
 	Thread* thread = NULL;
 
 	if (lastID == 0) {
-		// We start with the main thread
+		// We start with the main thread.
 		thread = team->main_thread;
 	} else {
-		// Find the one thread with an ID greater than ours (as long as the IDs
-		// don't wrap they are always sorted from highest to lowest).
-		// TODO: That is broken not only when the IDs wrap, but also for the
-		// kernel team, to which threads are added when they are dying.
-		for (Thread* next = team->thread_list; next != NULL;
-				next = next->team_next) {
-			if (next->id <= lastID)
+		// Find the previous thread after the one with the last ID.
+		bool found = false;
+		for (Thread* previous = team->thread_list.Last(); previous != NULL;
+				previous = team->thread_list.GetPrevious(previous)) {
+			if (previous->id == lastID) {
+				found = true;
+				thread = team->thread_list.GetPrevious(previous);
 				break;
+			}
+		}
 
-			thread = next;
+		if (!found) {
+			// Fall back to finding the thread with the next greatest ID (as long
+			// as IDs don't wrap, they are always sorted from highest to lowest).
+			// This won't work properly if IDs wrap, or for the kernel team (to
+			// which threads are added when they are dying), but this is only a
+			// fallback for when the previous thread wasn't found, anyway.
+			for (Thread* next = team->thread_list.First(); next != NULL;
+					next = team->thread_list.GetNext(next)) {
+				if (next->id <= lastID)
+					break;
+
+				thread = next;
+			}
 		}
 	}
 
@@ -3701,26 +3798,6 @@ _user_find_thread(const char *userName)
 		return B_BAD_ADDRESS;
 
 	return find_thread(name);
-}
-
-
-status_t
-_user_wait_for_thread(thread_id id, status_t *userReturnCode)
-{
-	status_t returnCode;
-	status_t status;
-
-	if (userReturnCode != NULL && !IS_USER_ADDRESS(userReturnCode))
-		return B_BAD_ADDRESS;
-
-	status = wait_for_thread_etc(id, B_CAN_INTERRUPT, 0, &returnCode);
-
-	if (status == B_OK && userReturnCode != NULL
-		&& user_memcpy(userReturnCode, &returnCode, sizeof(status_t)) < B_OK) {
-		return B_BAD_ADDRESS;
-	}
-
-	return syscall_restart_handle_post(status);
 }
 
 

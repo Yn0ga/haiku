@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 
+#include <driver_settings.h>
 #include <Entry.h>
 #include <File.h>
 #include <ObjectList.h>
@@ -33,7 +34,7 @@ protected:
 			void				AddConditionsToString(BString& string) const;
 
 protected:
-			BObjectList<Condition> fConditions;
+			BObjectList<Condition, true> fConditions;
 };
 
 
@@ -179,7 +180,7 @@ Condition::IsConstant(ConditionContext& context) const
 
 ConditionContainer::ConditionContainer(const BMessage& args)
 	:
-	fConditions(10, true)
+	fConditions(10)
 {
 	char* name;
 	type_code type;
@@ -197,7 +198,7 @@ ConditionContainer::ConditionContainer(const BMessage& args)
 
 ConditionContainer::ConditionContainer()
 	:
-	fConditions(10, true)
+	fConditions(10)
 {
 }
 
@@ -544,8 +545,23 @@ SettingCondition::Test(ConditionContext& context) const
 				}
 			}
 		}
+		return false;
 	}
-	// TODO: check for driver settings, too?
+
+	void* handle = load_driver_settings(fPath.Path());
+	if (handle != NULL) {
+		char buffer[512];
+		size_t bufferSize = sizeof(buffer);
+		if (get_driver_settings_string(handle, buffer, &bufferSize, true) == B_OK) {
+			BString pattern(fField);
+			if (!fValue.IsEmpty()) {
+				pattern << " = ";
+				pattern << fValue;
+			}
+			return strstr(buffer, pattern.String()) != NULL;
+		}
+		unload_driver_settings(handle);
+	}
 
 	return false;
 }

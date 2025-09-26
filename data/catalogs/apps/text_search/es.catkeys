@@ -1,4 +1,4 @@
-1	spanish; castilian	x-vnd.Haiku.TextSearch	1757850908
+1	spanish; castilian	x-vnd.Haiku.TextSearch	4043418158
 Please select the files you wish to have selected for you in Tracker.	GrepWindow		Por favor selecciona los archivos que quieras 
 %appname% : %path%	GrepWindow		%appname% : %path%
 Failed to start xargs program!	Grepper		¡Falló al iniciar el programa xargs!
@@ -7,14 +7,15 @@ Actions	GrepWindow		Acciones
 New window	GrepWindow		Nueva ventana
 Encoding	GrepWindow		Codificación
 Set target to parent folder	GrepWindow		Definir objetivo a la carpeta superior
+Clear history	GrepWindow		Borrar historial
 OK	GrepWindow		OK
 %appname% : %path% : %searchtext%	GrepWindow		%appname% : %path% : %searchtext%
 Close	GrepWindow		Cerrar
 Look in sub-folders	GrepWindow		Buscar en subcarpetas
 %s: Not enough room to escape the filename.	Grepper		%s: No hay suficiente espacio para evitar el nombre del archivo
+Text files only	GrepWindow		Solo archivos de texto
 Follow symbolic links	GrepWindow		Siga los enlaces simbólicos
 Regular expression	GrepWindow		Expresión regular
-Text files only	GrepWindow		Solo archivos de texto
 Quit	GrepWindow		Salir
 Show files in Tracker	GrepWindow		Mostrar archivos en el rastreador
 Please select the files you wish to keep searching.	GrepWindow		Por favor selecciona los archivos que desea seguir buscado

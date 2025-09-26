@@ -228,6 +228,15 @@ TabletDevice::DetectDevice(const DeviceReader* reader)
 		case 0xB7:  // Wacom PTZ-431W Intuos3 4x6
 			SetDevice(31496.0, 19685.0, DEVICE_INTUOS3);
 			break;
+		case 0xB8: // Wacom Intuos4S PTK-440 (S)
+			SetDevice(31496.0, 19685.0, DEVICE_INTUOS4);
+			break;
+		case 0xB9: // Wacom Intuos4 PTK-640 (M)
+			SetDevice(44704.0, 27940.0, DEVICE_INTUOS4);
+			break;
+		case 0xBA: // Wacom Intuos4L PTK-840 (L)
+			SetDevice(63000.0, 39400.0, DEVICE_INTUOS4);
+			break;
 		case 0xD0:	// Wacom Bamboo 2FG (from Linux Wacom Project)
 			SetDevice(14720.0, 9200.0, DEVICE_BAMBOO_PT);
 			break;
@@ -261,11 +270,17 @@ TabletDevice::DetectDevice(const DeviceReader* reader)
 		case 0xDD:	// Wacom Bamboo Pen/Connect (CTL-470) (from Linux Wacom Project)
 			SetDevice(14720.0, 9200.0, DEVICE_BAMBOO_PT);
 			break;
+		case 0xDE:	// Wacom Bamboo Fun Pen & Touch (CTH-470)
+			SetDevice(14720.0, 9200.0, DEVICE_BAMBOO_PT);
+			break;
 		case 0x0301: // One by Wacom CTL-671
 			SetDevice(21648.0, 13530.0, DEVICE_BAMBOO_PT);
 			break;
 		case 0x037b: // One by Wacom CTL-672
 			SetDevice(21648.0, 13530.0, DEVICE_BAMBOO_PT);
+			break;
+		case 0x0304: // Wacom Cintiq 13HD
+			SetDevice(29376.0, 16524.0, DEVICE_CINTIQ);
 			break;
 		default:
 			status = B_BAD_VALUE;
@@ -289,7 +304,7 @@ TabletDevice::SetDevice(float maxX, float maxY, uint32 mode)
 void
 TabletDevice::ReadData(const uchar* data, int dataBytes, bool& hasContact,
 	uint32& mode, uint32& buttons, float& x, float& y, float& pressure,
-	int32& clicks, int32& eraser, float& wheelX, float& wheelY,
+	int32& clicks, int32& eraser, float& wheelX, float& wheelY, float& lastWheelY,
 	float& tiltX, float& tiltY) const
 {
 	hasContact = false;
@@ -367,9 +382,11 @@ TabletDevice::ReadData(const uchar* data, int dataBytes, bool& hasContact,
 		}
 		case DEVICE_INTUOS:
 		case DEVICE_INTUOS3:
+		case DEVICE_INTUOS4:
 		case DEVICE_CINTIQ:
+		{
 			if ((data[0] == 0x02) && !(((data[1] >> 5) & 0x03) == 0x02)) {
-				if (fDeviceMode == DEVICE_INTUOS3) {
+				if (fDeviceMode == DEVICE_INTUOS3 || fDeviceMode == DEVICE_INTUOS4) {
 					xPos = (data[2] << 9) | (data[3] << 1)
 						| ((data[9] >> 1) & 1);
 					yPos = (data[4] << 9) | (data[5] << 1) | (data[9] & 1);
@@ -429,8 +446,33 @@ TabletDevice::ReadData(const uchar* data, int dataBytes, bool& hasContact,
 					tiltX = (float)(tiltDataX - 64) / 64.0;
 					tiltY = (float)(tiltDataY - 64) / 64.0;
 				}
+			} else if (data[0] == 0x0c) { // Wheel pad
+
+				// Touch Ring rotation (delta)
+				uint8 wheelDelta = data[1];
+				uint8 ringValue = wheelDelta & 0x7f;
+				bool ringProximity = (wheelDelta & 0x80) != 0;
+				float localWheelY = ringValue / 30.0f; // sensibility of 30.0
+				wheelY = localWheelY;
+
+			    if (localWheelY > lastWheelY) {
+					lastWheelY = wheelY;
+			    } else {
+					wheelY = -wheelY;
+				    lastWheelY = -wheelY; // use absolute value for lastWheelY
+			    }
+
+				buttons = 0;
+				x = fPosX * fMaxX;
+				y = fPosY * fMaxY;
+				hasContact = ringProximity;
+				mode = MODE_MOUSE;
+				pressure = 0.0;
+				eraser = 0;
+				tiltX = tiltY = 0.0;
 			}
 			break;
+		}
 		case DEVICE_PL500: {
 			hasContact = ( data[1] & 0x20);
 			xPos = data[2] << 8 | data[3];
@@ -656,6 +698,7 @@ TabletDevice::poll_usb_device(void* arg)
 
 	uchar data[max_c(12, dataBytes)];
 
+	float lastWheelY = 0.0;
 	while (tabletDevice->IsActive()) {
 
 		status_t ret = reader->ReadData(data, dataBytes);
@@ -672,12 +715,13 @@ TabletDevice::poll_usb_device(void* arg)
 			int32 eraser = 0;
 			float wheelX = 0.0;
 			float wheelY = 0.0;
+
 			float tiltX = 0.0;
 			float tiltY = 0.0;
 			// let the device extract all information from the data
 			tabletDevice->ReadData(data, dataBytes, hasContact, mode, buttons,
 								   x, y, pressure, clicks, eraser,
-								   wheelX, wheelY, tiltX, tiltY);
+								   wheelX, wheelY, lastWheelY, tiltX, tiltY);
 			if (hasContact) {
 				// apply the changes to the device
 				tabletDevice->SetStatus(mode, buttons, x, y, pressure,
@@ -713,6 +757,7 @@ TabletDevice::_DeviceSupportsTilt() const
 	switch (fDeviceMode) {
 		case DEVICE_INTUOS:
 		case DEVICE_INTUOS3:
+		case DEVICE_INTUOS4:
 		case DEVICE_CINTIQ:
 			tilt = true;
 			break;
@@ -844,6 +889,16 @@ TabletDevice::_GetName(uint16 productID, const char** name) const
 			*name = "Wacom Intuos3 9x12 USB";
 			break;
 
+		case 0xB8:
+			*name = "Wacom Intuos4 Small 4x6 (PTK-440)";
+			break;
+		case 0xB9:
+			*name = "Wacom Intuos4 Medium 6x9 (PTK-640)";
+			break;
+		case 0xBA:
+			*name = "Wacom Intuos4 Large 8x13 (PTK-840)";
+			break;
+
 		case 0xD0:
 			*name = "Wacom Bamboo 2FG USB";
 			break;
@@ -877,11 +932,17 @@ TabletDevice::_GetName(uint16 productID, const char** name) const
 		case 0xDD:
 			*name = "Wacom Bamboo Pen/Connect (CTL-470)";
 			break;
+		case 0xDE:
+			*name = "Wacom Bamboo Fun Pen & Touch (CTH-470)";
+			break;
 		case 0x0301:
 			*name = "One by Wacom (CTL-671)";
 			break;
 		case 0x037b:
 			*name = "One by Wacom (CTL-672)";
+			break;
+		case 0x0304:
+			*name = "Wacom Cintiq 13HD";
 			break;
 
 		default:

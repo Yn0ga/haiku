@@ -20,13 +20,14 @@ class FileSystem;
 class Request {
 public:
 	inline						Request(RPC::Server* server,
-									FileSystem* fileSystem);
+									FileSystem* fileSystem,
+									uid_t uid, gid_t gid, bool singleAttempt = false);
 
 	inline	RequestBuilder&		Builder();
 	inline	ReplyInterpreter&	Reply();
 
 			status_t			Send(Cookie* cookie = NULL);
-			void				Reset();
+			void				Reset(uid_t uid, gid_t gid);
 
 private:
 			status_t			_SendUDP(Cookie* cookie);
@@ -37,14 +38,19 @@ private:
 
 			RequestBuilder		fBuilder;
 			ReplyInterpreter	fReply;
+
+			bool				fSingleAttempt;
 };
 
 
 inline
-Request::Request(RPC::Server* server, FileSystem* fileSystem)
+Request::Request(RPC::Server* server, FileSystem* fileSystem, uid_t uid, gid_t gid,
+	bool singleAttempt)
 	:
 	fServer(server),
-	fFileSystem(fileSystem)
+	fFileSystem(fileSystem),
+	fBuilder(uid, gid),
+	fSingleAttempt(singleAttempt)
 {
 	ASSERT(server != NULL);
 }

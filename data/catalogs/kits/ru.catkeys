@@ -1,4 +1,4 @@
-1	russian	x-vnd.Haiku-libbe	1445751563
+1	russian	x-vnd.Haiku-libbe	310849835
 All Rights Reserved.	AboutWindow		Все права защищены.
 gold master	AboutWindow		золотая
 Undo	TextView		Отменить
@@ -24,7 +24,6 @@ Error	ZombieReplicantView		Ошибка
 Paste	TextView		Вставить
 OK	AboutWindow		ОК
 %s MiB/s	StringForRate	units per second	%s Мбайт/с
-Special Thanks:	AboutWindow		Особые благодарности:
 %s TiB	StringForSize	size unit	%s Тбайт
 Default Haiku window decorator.	Default decorator about box		Декоратор окон Haiku по умолчанию.
 %s GiB	StringForSize	size unit	%s Гбайт
@@ -46,5 +45,6 @@ Version history:	AboutWindow		История версий:
 Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Не удалось найти приложение этого репликанта. Не указана сигнатура приложения.\n%error
 %s KiB/s	StringForRate	units per second	%s Кбайт/с
 Blue:	ColorControl		Синий:
+Special thanks:	AboutWindow		Особая благодарность:
 Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Невозможно удалить репликант \"%description\".\n%error
 Written by:	AboutWindow		Разработан:

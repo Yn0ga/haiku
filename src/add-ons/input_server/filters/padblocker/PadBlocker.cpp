@@ -46,6 +46,7 @@
 #include <OS.h>
 #include <StorageKit.h>
 
+#include <add-ons/input_server/InputServerDevice.h>
 #include <add-ons/input_server/InputServerFilter.h>
 
 #if DEBUG
@@ -74,7 +75,6 @@ class PadBlocker : public BInputServerFilter
 		bigtime_t 			_lastKeyUp; //timestamp of last B_KEY_DOWN
 		bigtime_t 			_threshold;
 		status_t			GetSettingsPath(BPath& path);
-		BPoint				fWindowPosition;
 };
 
 
@@ -101,24 +101,28 @@ PadBlocker::PadBlocker()
 	#endif
 	BPath path;
 	status_t status = GetSettingsPath(path);
-	if (status == B_OK)
-	{
-
+	if (status == B_OK) {
 		BFile settingsFile(path.Path(), B_READ_ONLY);
 		status = settingsFile.InitCheck();
-		if (status == B_OK)
-		{
-
-			if (settingsFile.Read(&settings, sizeof(touchpad_settings))
-				!= sizeof(touchpad_settings)) {
-				LOG("failed to load settings\n");
-				status = B_ERROR;
-			}
-			if (settingsFile.Read(&fWindowPosition, sizeof(BPoint))
-				!= sizeof(BPoint)) {
-				LOG("failed to load settings\n");
-				status = B_ERROR;
-			}
+		if (status == B_OK) {
+			BMessage settingsMsg;
+			status = settingsMsg.Unflatten(&settingsFile);
+			if (status != B_OK) {
+				off_t size;
+				settingsFile.Seek(0, SEEK_SET);
+				if (settingsFile.GetSize(&size) == B_OK && size == 28) {
+					if (settingsFile.Read(&settings, 20) != 20) {
+						LOG("failed to load old settings\n");
+						status = B_ERROR;
+					} else
+						status = B_OK;
+				} else {
+					LOG("failed to load settings\n");
+					status = B_ERROR;
+				}
+			} else
+				settingsMsg.FindInt16("padblocker_threshold",
+					(int16*)&settings.padblocker_threshold);
 		}
 	}
 
@@ -155,14 +159,21 @@ filter_result PadBlocker::Filter(BMessage *message, BList *outList)
 	{
 		case B_KEY_UP: case B_KEY_DOWN:
 		{
-			_lastKeyUp = system_time();	//update timestamp
+			if (!message->HasInt32("be:key_repeat"))
+				_lastKeyUp = system_time();	//update timestamp
 			break;
 		}
 
 		case B_MOUSE_DOWN:
 		{
+			int32 device;
 			// do nothing if disabled
 			if (_threshold == 0)
+				break;
+
+			// only block touchpad devices
+			if (message->FindInt32("be:device_subtype", &device) != B_OK
+				|| device != B_TOUCHPAD_POINTING_DEVICE)
 				break;
 
 			bigtime_t now = system_time();

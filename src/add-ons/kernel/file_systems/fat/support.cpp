@@ -57,9 +57,7 @@
 
 #include "support.h"
 
-#ifdef FS_SHELL
-#include "fssh_api_wrapper.h"
-#else // !FS_SHELL
+#ifndef FS_SHELL
 #include <dirent.h>
 #include <malloc.h>
 
@@ -68,8 +66,11 @@
 
 #include <AutoDeleter.h>
 #include <file_systems/mime_ext_table.h>
+#include <kernel.h>
 #include <real_time_clock.h>
 #include <util/AutoLock.h>
+#else
+#include <fssh_kernel_priv.h>
 #endif // !FS_SHELL
 
 #include "debug.h"
@@ -239,7 +240,7 @@ label_to_fat(char* label)
 
 /*! Convert a volume label from the format stored on disk into a normal string.
 	@param name A character array of length 11 or a C string of size 12.
-	@post Name is null-teriminated after the last non-space character.
+	@post Name is null-terminated after the last non-space character, and converted to lower case.
 */
 void
 label_from_fat(char* name)
@@ -250,6 +251,11 @@ label_from_fat(char* name)
 			break;
 	}
 	name[i + 1] = 0;
+
+	for (; i >= 0; i--) {
+		if (name[i] >= 'A' && name[i] <= 'Z')
+			name[i] += 'a' - 'A';
+	}
 }
 
 
@@ -554,7 +560,8 @@ read_fsinfo(msdosfsmount* volume, const vnode* devNode)
 		const uint8* buffer;
 		const struct fsinfo* fsInfo;
 
-		status = block_cache_get_etc(volume->pm_mountp->mnt_cache, volume->pm_fsinfo, 0, 1,
+		off_t cachedBlock = BLOCK_TO_SECTOR(volume, volume->pm_fsinfo);
+		status = block_cache_get_etc(volume->pm_mountp->mnt_cache, cachedBlock,
 			reinterpret_cast<const void**>(&buffer));
 		if (status != B_OK)
 			RETURN_ERROR(status);
@@ -572,7 +579,7 @@ read_fsinfo(msdosfsmount* volume, const vnode* devNode)
 			volume->pm_fsinfo = 0;
 		}
 
-		block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+		block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 	}
 
 	/*
@@ -600,15 +607,16 @@ write_fsinfo(msdosfsmount* volume)
 		return B_OK;
 	}
 
-	void* buffer = block_cache_get_writable(volume->pm_mountp->mnt_cache, volume->pm_fsinfo, -1);
+	off_t cachedBlock = BLOCK_TO_SECTOR(volume, volume->pm_fsinfo);
+	void* buffer = block_cache_get_writable(volume->pm_mountp->mnt_cache, cachedBlock, -1);
 	if (buffer == NULL)
 		RETURN_ERROR(B_ERROR);
 
 	struct fsinfo* fsInfo = reinterpret_cast<struct fsinfo*>(buffer);
 	if (memcmp(fsInfo->fsisig1, "RRaA", 4) != 0 || memcmp(fsInfo->fsisig2, "rrAa", 4) != 0
 		|| memcmp(fsInfo->fsisig3, "\0\0\125\252", 4) != 0) {
-		block_cache_set_dirty(volume->pm_mountp->mnt_cache, volume->pm_fsinfo, false, -1);
-		block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+		block_cache_set_dirty(volume->pm_mountp->mnt_cache, cachedBlock, false, -1);
+		block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 		RETURN_ERROR(B_ERROR);
 	}
 
@@ -616,7 +624,7 @@ write_fsinfo(msdosfsmount* volume)
 	putulong(fsInfo->fsinxtfree, volume->pm_nxtfree);
 	volume->pm_flags &= ~MSDOSFS_FSIMOD;
 
-	block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+	block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 
 	return B_OK;
 }
@@ -629,32 +637,36 @@ write_fsinfo(msdosfsmount* volume)
 status_t
 check_fat(const msdosfsmount* volume)
 {
-	uint8 fatBuffer[512];
-	uint8 mirrorBuffer[512];
+	uint32 bytesPerSec = volume->pm_BytesPerSec;
+	uint32 fatSectors = volume->pm_FATsecs / volume->pm_BlkPerSec;
+		// pm_FATsecs is always in units of DEV_BSIZE
+
+	uint8 fatBuffer[bytesPerSec];
+	uint8 mirrorBuffer[bytesPerSec];
 
 	// For small FATs, check whether each FAT mirror matches the active FAT.
-	// For large FATs, that takes too long, so just check the first block of each FAT.
-	uint32 checkBlocks = volume->pm_FATsecs > 4096 ? 1 : volume->pm_FATsecs;
-	PRINT("check_fat checking %" B_PRIu32 " blocks\n", checkBlocks);
+	// For large FATs, that takes too long, so just check the first sector of each FAT.
+	uint32 checkSectors = fatSectors > 4096 ? 1 : fatSectors;
+	PRINT("check_fat checking %" B_PRIu32 " sectors\n", checkSectors);
 
-	// for each block
-	for (uint32 i = 0; i < checkBlocks; ++i) {
-		// read a block from the first/active fat
-		uint32 resBlocks = volume->pm_ResSectors * volume->pm_BlkPerSec;
-		off_t position = 512 * (resBlocks + volume->pm_curfat * volume->pm_FATsecs + i);
+	// for each sector
+	for (uint32 i = 0; i < checkSectors; ++i) {
+		// read a sector from the first/active fat
+		uint32 resSectors = volume->pm_ResSectors;
+		off_t position = bytesPerSec * (resSectors + volume->pm_curfat * fatSectors + i);
 		ssize_t bytes_read
-			= read_pos(volume->pm_dev->si_fd, position, reinterpret_cast<void*>(fatBuffer), 0x200);
-		if (bytes_read != 0x200)
+			= read_pos(volume->pm_dev->si_fd, position, reinterpret_cast<void*>(fatBuffer), bytesPerSec);
+		if (bytes_read != static_cast<ssize_t>(bytesPerSec))
 			RETURN_ERROR(B_IO_ERROR);
 
 		// for each mirror
 		for (uint32 j = 0; j < volume->pm_FATs; ++j) {
 			if (j == volume->pm_curfat)
 				continue;
-			position = 512 * (resBlocks + volume->pm_FATsecs * j + i);
+			position = bytesPerSec * (resSectors + fatSectors * j + i);
 			bytes_read = read_pos(volume->pm_dev->si_fd, position,
-				reinterpret_cast<void*>(mirrorBuffer), 0x200);
-			if (bytes_read != 0x200)
+				reinterpret_cast<void*>(mirrorBuffer), bytesPerSec);
+			if (bytes_read != static_cast<ssize_t>(bytesPerSec))
 				RETURN_ERROR(B_IO_ERROR);
 
 			if (i == 0 && mirrorBuffer[0] != volume->pm_Media) {
@@ -667,7 +679,7 @@ check_fat(const msdosfsmount* volume)
 			// checking for exact matches of fats is too
 			// restrictive; allow these to go through in
 			// case the fat is corrupted for some reason
-			if (memcmp(fatBuffer, mirrorBuffer, 0x200)) {
+			if (memcmp(fatBuffer, mirrorBuffer, bytesPerSec)) {
 				INFORM("FAT %" B_PRIu32 " doesn't match active FAT (%u) on %s.\n"
 					   "Install dosfstools and use fsck.fat to inspect %s.\n",
 					j, volume->pm_curfat, volume->pm_dev->si_device, volume->pm_dev->si_device);
@@ -922,7 +934,9 @@ get_location(mount* bsdVolume, ino_t vnid, u_long* dirclust, u_long* diroffset)
 	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
 	ino_t location = -1;
 
-	vcache_vnid_to_loc(bsdVolume, vnid, &location);
+	status_t status = vcache_vnid_to_loc(bsdVolume, vnid, &location);
+	if (status != B_OK)
+		return status;
 
 	if (dirclust != NULL && diroffset != NULL) {
 		// do the reverse of DETOI
@@ -1076,13 +1090,17 @@ sync_clusters(vnode* bsdNode)
 	u_long cluster = fatNode->de_dirclust;
 
 	if (cluster == MSDOSFSROOT) {
-		status = block_cache_sync_etc(bsdVolume->mnt_cache, fatVolume->pm_rootdirblk,
-			fatVolume->pm_rootdirsize);
+		off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, fatVolume->pm_rootdirblk);
+		size_t numBlocks =
+			HOWMANY(fatVolume->pm_rootdirsize * DEV_BSIZE, fatVolume->pm_BytesPerSec);
+		status = block_cache_sync_etc(bsdVolume->mnt_cache, cachedBlock, numBlocks);
 	} else {
 		status_t fatStatus = B_OK;
 		while ((IS_DATA_CLUSTER(cluster)) && status == B_OK && fatStatus == B_OK) {
-			status = block_cache_sync_etc(bsdVolume->mnt_cache, de_cn2bn(fatVolume, cluster),
-				BLOCKS_PER_CLUSTER(fatVolume));
+			off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, cntobn(fatVolume, cluster));
+				// changed from de_cn2bn
+			status = block_cache_sync_etc(bsdVolume->mnt_cache, cachedBlock,
+				SECTORS_PER_CLUSTER(fatVolume));
 			fatStatus = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 		}
 		if (fatStatus != B_OK)
@@ -1112,14 +1130,14 @@ discard_clusters(vnode* bsdNode, off_t newLength)
 	// Typically we are discarding all clusters associated with a directory. However, in
 	// the case of an error, the driver might shrink a directory to undo an attempted expansion,
 	// as in createde.
-	for (uint32 skip = howmany(newLength, fatVolume->pm_bpcluster); skip > 0 && status == B_OK;
+	for (uint32 skip = HOWMANY(newLength, fatVolume->pm_bpcluster); skip > 0 && status == B_OK;
 		skip--) {
 		status = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 	}
 
 	while ((IS_DATA_CLUSTER(cluster)) && status == B_OK) {
-		block_cache_discard(bsdVolume->mnt_cache, de_cn2bn(fatVolume, cluster),
-			BLOCKS_PER_CLUSTER(fatVolume));
+		off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, cntobn(fatVolume, cluster));
+		block_cache_discard(bsdVolume->mnt_cache, cachedBlock, SECTORS_PER_CLUSTER(fatVolume));
 		status = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 	}
 

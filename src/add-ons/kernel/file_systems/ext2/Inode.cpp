@@ -456,29 +456,9 @@ Inode::Unlink(Transaction& transaction)
 	if ((IsDirectory() && numLinks == 2) || (numLinks == 1))  {
 		fUnlinked = true;
 
-		TRACE("Inode::Unlink(): Putting inode in orphan list\n");
-		ino_t firstOrphanID;
-		status_t status = fVolume->SaveOrphan(transaction, fID, firstOrphanID);
-		if (status != B_OK)
-			return status;
-
-		if (firstOrphanID != 0) {
-			Vnode firstOrphan(fVolume, firstOrphanID);
-			Inode* nextOrphan;
-
-			status = firstOrphan.Get(&nextOrphan);
-			if (status != B_OK)
-				return status;
-
-			fNode.SetNextOrphan(nextOrphan->ID());
-		} else {
-			// Next orphan link is stored in deletion time
-			fNode.deletion_time = 0;
-		}
-
 		fNode.num_links = 0;
 
-		status = remove_vnode(fVolume->FSVolume(), fID);
+		status_t status = remove_vnode(fVolume->FSVolume(), fID);
 		if (status != B_OK)
 			return status;
 	} else if (!IsDirectory() || numLinks > 2)
@@ -546,8 +526,7 @@ Inode::Create(Transaction& transaction, Inode* parent, const char* name,
 			if ((openMode & O_DIRECTORY) != 0 && !inode->IsDirectory())
 				return B_NOT_A_DIRECTORY;
 
-			if (inode->CheckPermissions(open_mode_to_access(openMode)
-					| ((openMode & O_TRUNC) != 0 ? W_OK : 0)) != B_OK)
+			if (inode->CheckPermissions(open_mode_to_access(openMode)) != B_OK)
 				return B_NOT_ALLOWED;
 
 			if ((openMode & O_TRUNC) != 0) {
@@ -857,7 +836,7 @@ Inode::_EnlargeDataStream(Transaction& transaction, off_t size)
 	fNode.SetSize(size);
 	TRACE("Inode::_EnlargeDataStream(): Setting allocated block count to %"
 		B_PRIdOFF "\n", end);
-	return _SetNumBlocks(NumBlocks() + end * (fVolume->BlockSize() / 512));
+	return _SetNumBlocks(end * (fVolume->BlockSize() / 512));
 }
 
 
@@ -876,8 +855,8 @@ Inode::_ShrinkDataStream(Transaction& transaction, off_t size)
 		// Minimum size that doesn't require freeing blocks
 
 	if (size > minSize) {
-		// No need to allocate more blocks
-		TRACE("Inode::_ShrinkDataStream(): No need to allocate more blocks\n");
+		// No need to free more blocks
+		TRACE("Inode::_ShrinkDataStream(): No need to free more blocks\n");
 		TRACE("Inode::_ShrinkDataStream(): Setting size to %" B_PRIdOFF "\n",
 			size);
 		fNode.SetSize(size);
@@ -895,7 +874,9 @@ Inode::_ShrinkDataStream(Transaction& transaction, off_t size)
 	}
 
 	fNode.SetSize(size);
-	return _SetNumBlocks(NumBlocks() - end * (fVolume->BlockSize() / 512));
+	TRACE("Inode::_ShrinkDataStream(): Setting allocated block count to %"
+		B_PRIdOFF "\n", end);
+	return _SetNumBlocks(end * (fVolume->BlockSize() / 512));
 }
 
 
@@ -1003,7 +984,9 @@ Inode::SetDirEntryChecksum(uint8* block, uint32 id, uint32 gen)
 {
 	if (fVolume->HasMetaGroupChecksumFeature()) {
 		ext2_dir_entry_tail* tail = _DirEntryTail(block);
+		tail->zero1 = 0;
 		tail->twelve = 12;
+		tail->zero2 = 0;
 		tail->hexade = 0xde;
 		tail->checksum = _DirEntryChecksum(block, id, gen);
 	}

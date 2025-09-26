@@ -67,9 +67,9 @@ BPackageManager::BPackageManager(BPackageInstallationLocation location,
 	fHomeRepository(new (std::nothrow) InstalledRepository("home",
 		B_PACKAGE_INSTALLATION_LOCATION_HOME, -3)),
 	fInstalledRepositories(10),
-	fOtherRepositories(10, true),
+	fOtherRepositories(10),
 	fLocalRepository(new (std::nothrow) MiscLocalRepository),
-	fTransactions(5, true),
+	fTransactions(5),
 	fInstallationInterface(installationInterface),
 	fUserInteractionHandler(userInteractionHandler)
 {
@@ -157,19 +157,22 @@ BPackageManager::SetDebugLevel(int32 level)
 
 
 void
-BPackageManager::Install(const char* const* packages, int packageCount)
+BPackageManager::Install(const char* const* packages, int packageCount, bool refresh)
 {
 	BSolverPackageSpecifierList packagesToInstall;
 	_AddPackageSpecifiers(packages, packageCount, packagesToInstall);
-	Install(packagesToInstall);
+	Install(packagesToInstall, refresh);
 }
 
 
 void
-BPackageManager::Install(const BSolverPackageSpecifierList& packages)
+BPackageManager::Install(const BSolverPackageSpecifierList& packages, bool refresh)
 {
-	Init(B_ADD_INSTALLED_REPOSITORIES | B_ADD_REMOTE_REPOSITORIES
-		| B_REFRESH_REPOSITORIES);
+	uint32 flags = B_ADD_INSTALLED_REPOSITORIES | B_ADD_REMOTE_REPOSITORIES;
+	if (refresh)
+		flags |= B_REFRESH_REPOSITORIES;
+
+	Init(flags);
 
 	// solve
 	const BSolverPackageSpecifier* unmatchedSpecifier;
@@ -976,7 +979,7 @@ BPackageManager::InstalledRepository::InstalledRepository(const char* name,
 	BPackageInstallationLocation location, int32 priority)
 	:
 	LocalRepository(),
-	fDisabledPackages(10, true),
+	fDisabledPackages(10),
 	fPackagesToActivate(),
 	fPackagesToDeactivate(),
 	fInitialName(name),

@@ -17,6 +17,9 @@
 #include "TwoKeyAVLTree.h"
 #include "Volume.h"
 
+#include <util/AutoLock.h>
+
+
 // compare_integral
 template<typename Key>
 static inline
@@ -234,9 +237,10 @@ AttributeIndexImpl::CountEntries() const
 
 // Changed
 status_t
-AttributeIndexImpl::Changed(Attribute *attribute, const uint8 *oldKey,
-							size_t oldLength)
+AttributeIndexImpl::Changed(Attribute *attribute, const uint8 *oldKey, size_t oldLength)
 {
+	fVolume->AssertWriteLocked();
+
 	status_t error = B_BAD_VALUE;
 	if (attribute && attribute->GetIndex() == this) {
 		// update the iterators and remove the attribute from the tree
@@ -256,17 +260,16 @@ AttributeIndexImpl::Changed(Attribute *attribute, const uint8 *oldKey,
 				}
 				// remove and re-insert the attribute
 				it.Remove();
+				attribute->SetIndex(this, false);
 			}
 		}
 		// re-insert the attribute
 		if (fKeyLength > 0 && attribute->GetSize() != (off_t)fKeyLength) {
-			attribute->SetIndex(this, false);
+			ASSERT(!attribute->IsInIndex());
 		} else {
 			error = fAttributes->Insert(attribute);
 			if (error == B_OK)
 				attribute->SetIndex(this, true);
-			else
-				attribute->SetIndex(NULL, false);
 		}
 	}
 	return error;
@@ -276,7 +279,9 @@ AttributeIndexImpl::Changed(Attribute *attribute, const uint8 *oldKey,
 status_t
 AttributeIndexImpl::Added(Attribute *attribute)
 {
-PRINT("AttributeIndex::Add(%p)\n", attribute);
+	PRINT("AttributeIndex::Add(%p)\n", attribute);
+	fVolume->AssertWriteLocked();
+
 	status_t error = (attribute ? B_OK : B_BAD_VALUE);
 	if (error == B_OK) {
 		size_t size = attribute->GetSize();
@@ -295,13 +300,17 @@ PRINT("AttributeIndex::Add(%p)\n", attribute);
 bool
 AttributeIndexImpl::Removed(Attribute *attribute)
 {
-PRINT("AttributeIndex::Removed(%p)\n", attribute);
-	bool result = (attribute && attribute->GetIndex() == this);
-	if (result) {
-		if (attribute->IsInIndex())
-			fAttributes->Remove(attribute, attribute);
+	PRINT("AttributeIndex::Removed(%p)\n", attribute);
+	fVolume->AssertWriteLocked();
+
+	if (attribute == NULL || attribute->GetIndex() != this)
+		return false;
+
+	bool result = true;
+	if (attribute->IsInIndex())
+		result = (fAttributes->Remove(attribute, attribute) == B_OK);
+	if (result)
 		attribute->SetIndex(NULL, false);
-	}
 	return result;
 }
 
@@ -339,6 +348,7 @@ AttributeIndexImpl::InternalFind(const uint8 *key, size_t length)
 void
 AttributeIndexImpl::_AddIterator(Iterator *iterator)
 {
+	RecursiveLocker locker(fVolume->GetAttributeIteratorLock());
 	fIterators->Insert(iterator);
 }
 
@@ -346,6 +356,7 @@ AttributeIndexImpl::_AddIterator(Iterator *iterator)
 void
 AttributeIndexImpl::_RemoveIterator(Iterator *iterator)
 {
+	RecursiveLocker locker(fVolume->GetAttributeIteratorLock());
 	fIterators->Remove(iterator);
 }
 

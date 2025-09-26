@@ -654,7 +654,7 @@ MainWin::MessageReceived(BMessage* msg)
 						BString urlString;
 						entry_ref fileRef;
 						for (int32 j = 0; msg->FindString("data", j, &urlString) == B_OK; j++) {
-							BUrl url(urlString);
+							BUrl url(urlString, true);
 							if (url.IsValid() && url.Protocol() != "file") {
 								UrlPlaylistItem* item = new UrlPlaylistItem(url);
 								if (!fPlaylist->AddItem(item, i + j)) {
@@ -1791,29 +1791,34 @@ MainWin::_CreateMenu()
 	fVideoMenu->AddItem(fSubTitleTrackMenu);
 	fVideoMenu->AddSeparatorItem();
 	BMessage* resizeMessage = new BMessage(M_VIEW_SIZE);
+	resizeMessage->AddInt32("size", 25);
+	fVideoMenu->AddItem(new BMenuItem(
+		B_TRANSLATE("25% scale"), resizeMessage, '0'));
+
+	resizeMessage = new BMessage(M_VIEW_SIZE);
 	resizeMessage->AddInt32("size", 50);
 	fVideoMenu->AddItem(new BMenuItem(
-		B_TRANSLATE("50% scale"), resizeMessage, '0'));
+		B_TRANSLATE("50% scale"), resizeMessage, '1'));
 
 	resizeMessage = new BMessage(M_VIEW_SIZE);
 	resizeMessage->AddInt32("size", 100);
 	fVideoMenu->AddItem(new BMenuItem(
-		B_TRANSLATE("100% scale"), resizeMessage, '1'));
+		B_TRANSLATE("100% scale"), resizeMessage, '2'));
 
 	resizeMessage = new BMessage(M_VIEW_SIZE);
 	resizeMessage->AddInt32("size", 200);
 	fVideoMenu->AddItem(new BMenuItem(
-		B_TRANSLATE("200% scale"), resizeMessage, '2'));
+		B_TRANSLATE("200% scale"), resizeMessage, '3'));
 
 	resizeMessage = new BMessage(M_VIEW_SIZE);
 	resizeMessage->AddInt32("size", 300);
 	fVideoMenu->AddItem(new BMenuItem(
-		B_TRANSLATE("300% scale"), resizeMessage, '3'));
+		B_TRANSLATE("300% scale"), resizeMessage, '4'));
 
 	resizeMessage = new BMessage(M_VIEW_SIZE);
 	resizeMessage->AddInt32("size", 400);
 	fVideoMenu->AddItem(new BMenuItem(
-		B_TRANSLATE("400% scale"), resizeMessage, '4'));
+		B_TRANSLATE("400% scale"), resizeMessage, '5'));
 
 	fVideoMenu->AddSeparatorItem();
 
@@ -2471,17 +2476,10 @@ MainWin::_KeyDown(BMessage* msg)
 			break;
 
 		case B_DELETE:
-		case 'd': 			// d for delete
-		case 't':			// t for Trash
-			if ((modifiers() & B_COMMAND_KEY) != 0) {
-				BAutolock _(fPlaylist);
-				BMessage removeMessage(M_PLAYLIST_MOVE_TO_TRASH);
-				removeMessage.AddInt32("playlist index",
-					fPlaylist->CurrentItemIndex());
-				fPlaylistWindow->PostMessage(&removeMessage);
-				return true;
-			}
-			break;
+			BAutolock _(fPlaylist);
+			BMessage removeMessage(M_PLAYLIST_REMOVE);
+			fPlaylistWindow->PostMessage(&removeMessage);
+			return true;
 	}
 
 	switch (key) {

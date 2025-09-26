@@ -9,6 +9,9 @@
 #define FILESYSTEM_H
 
 
+#include <fs_interface.h>
+
+#include "Debug.h"
 #include "Delegation.h"
 #include "InodeIdMap.h"
 #include "NFS4Defs.h"
@@ -19,6 +22,8 @@ class Inode;
 class RootInode;
 
 struct MountConfiguration {
+	bool		fReadOnly;
+
 	bool		fHard;
 	int			fRetryLimit;
 	bigtime_t	fRequestTimeout;
@@ -33,7 +38,7 @@ class FileSystem : public DoublyLinkedListLinkImpl<FileSystem> {
 public:
 	static	status_t			Mount(FileSystem** pfs, RPC::Server* serv,
 									const char* serverName, const char* path,
-									dev_t id,
+									fs_volume* volume,
 									const MountConfiguration& configuration);
 								~FileSystem();
 
@@ -78,11 +83,23 @@ public:
 	inline	const MountConfiguration&	GetConfiguration();
 
 	inline	mutex&				CreateFileLock();
+
+			status_t			TrashStaleNode(Inode* inode);
+			status_t			TrashIfStale(Inode* inode);
+			void				EnsureNoCollision(ino_t newId, const FileHandle& handle);
+			void				ServerUnlinkCleanup(ino_t id, Inode* parent,
+									const char* missingName);
+
+			void				Dump(void (*xprintf)(const char*, ...) = dprintf);
+
 private:
 								FileSystem(const MountConfiguration& config);
 
 	static	status_t			_ParsePath(RequestBuilder& req, uint32& count,
 									const char* _path);
+
+			void 				_DumpLocked(void (*xprintf)(const char*, ...),
+									bool dumpDelegations, bool dumpOpenFiles) const;
 
 			mutex				fCreateFileLock;
 
@@ -115,6 +132,8 @@ private:
 			InodeIdMap			fInoIdMap;
 
 			MountConfiguration	fConfiguration;
+
+			fs_volume*			fFsVolume;
 };
 
 

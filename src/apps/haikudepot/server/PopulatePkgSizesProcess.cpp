@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2023, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2025, Andrew Lindesay <apl@lindesay.co.nz>.
 
  * All rights reserved. Distributed under the terms of the MIT License.
  *
@@ -13,6 +13,7 @@
 #include <Catalog.h>
 
 #include "Logger.h"
+#include "PackageKitUtils.h"
 #include "PackageUtils.h"
 
 
@@ -22,7 +23,8 @@
 
 PopulatePkgSizesProcess::PopulatePkgSizesProcess(Model* model)
 	:
-	fModel(model)
+	fModel(model),
+	fProgress(0)
 {
 }
 
@@ -46,46 +48,94 @@ PopulatePkgSizesProcess::Description() const
 }
 
 
+float
+PopulatePkgSizesProcess::Progress()
+{
+	return fProgress;
+}
+
+
 status_t
 PopulatePkgSizesProcess::RunInternal()
 {
-	int32 countPkgs = 0;
+	int32 countPkgs;
 	int32 countPkgSized = 0;
 	int32 countPkgUnsized = 0;
 
 	HDINFO("[%s] will populate size for pkgs without a size", Name());
 
-	for (int32 d = 0; d < fModel->CountDepots() && !WasStopped(); d++) {
-		DepotInfoRef depotInfo = fModel->DepotAtIndex(d);
-		countPkgs += depotInfo->CountPackages();
+	const std::vector<PackageInfoRef> packages = _SnapshotOfPackages();
+	std::vector<PackageInfoRef> updatedPackages;
 
-		for (int32 p = 0; p < depotInfo->CountPackages(); p++) {
-			PackageInfoRef packageInfo = depotInfo->PackageAtIndex(p);
-			PackageState state = packageInfo->State();
+	countPkgs = static_cast<int32>(packages.size());
 
-			if (packageInfo->Size() <= 0
-					&& (state == ACTIVATED || state == INSTALLED)) {
-				off_t derivedSize = _DeriveSize(packageInfo);
+	for (int32 i = 0; i < countPkgs; i++) {
+		PackageInfoRef package = packages[i];
+		const char* packageName = package->Name().String();
 
-				if (derivedSize > 0) {
-					packageInfo->SetSize(derivedSize);
-					countPkgSized++;
-					HDDEBUG("[%s] did derive a size for package [%s]",
-						Name(), packageInfo->Name().String());
-				} else {
-					countPkgUnsized++;
-					HDDEBUG("[%s] unable to derive a size for package [%s]",
-						Name(), packageInfo->Name().String());
-				}
+		if (!package.IsSet())
+			HDFATAL("package is not set");
+
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (_ShouldDeriveSize(localInfo)) {
+			off_t derivedSize = _DeriveSize(package);
+
+			if (derivedSize > 0) {
+				PackageLocalInfoBuilder localInfoBuilder;
+
+				if (localInfo.IsSet())
+					localInfoBuilder = PackageLocalInfoBuilder(localInfo);
+
+				localInfoBuilder.WithSize(derivedSize);
+
+				PackageLocalInfoRef localInfo = localInfoBuilder.BuildRef();
+
+				updatedPackages.push_back(
+					PackageInfoBuilder(package).WithLocalInfo(localInfo).BuildRef());
+
+				countPkgSized++;
+				HDDEBUG("[%s] did derive a size for package [%s]", Name(), packageName);
+			} else {
+				countPkgUnsized++;
+				HDDEBUG("[%s] unable to derive a size for package [%s]", Name(), packageName);
 			}
 		}
+
+		_SetProgress(static_cast<float>(i) / static_cast<float>(countPkgs));
 	}
 
+	fModel->AddPackagesWithChange(updatedPackages, PKG_CHANGED_LOCAL_INFO);
+
+	_SetProgress(1.0);
+
 	HDINFO("[%s] did populate size for %" B_PRId32 " packages with %" B_PRId32
-		" already having a size and %" B_PRId32 " unable to derive a size",
-		Name(), countPkgSized, countPkgs - countPkgSized, countPkgUnsized);
+		   " already having a size and %" B_PRId32 " unable to derive a size",
+		Name(), countPkgSized, countPkgs - (countPkgSized + countPkgUnsized), countPkgUnsized);
 
 	return B_OK;
+}
+
+
+const std::vector<PackageInfoRef>
+PopulatePkgSizesProcess::_SnapshotOfPackages() const
+{
+	return fModel->Packages();
+}
+
+
+bool
+PopulatePkgSizesProcess::_ShouldDeriveSize(PackageLocalInfoRef localInfo) const
+{
+	if (!localInfo.IsSet())
+		return true;
+
+	if (localInfo->Size() > 0)
+		return false;
+
+	PackageState state = localInfo->State();
+
+	return state == ACTIVATED || state == INSTALLED;
 }
 
 
@@ -93,14 +143,25 @@ off_t
 PopulatePkgSizesProcess::_DeriveSize(const PackageInfoRef package) const
 {
 	BPath path;
-	if (PackageUtils::DeriveLocalFilePath(package.Get(), path) == B_OK) {
+	if (PackageKitUtils::DeriveLocalFilePath(package, path) == B_OK) {
 		BEntry entry(path.Path());
 		struct stat s = {};
 		if (entry.GetStat(&s) == B_OK)
 			return s.st_size;
 		else
 			HDDEBUG("unable to get the size of local file [%s]", path.Path());
-	} else
+	} else {
 		HDDEBUG("unable to get the local file of package [%s]", package->Name().String());
+	}
 	return 0;
+}
+
+
+void
+PopulatePkgSizesProcess::_SetProgress(float value)
+{
+	if (!_ShouldProcessProgress() && value != 1.0 && (value - fProgress) < 0.1)
+		return;
+	fProgress = value;
+	_NotifyChanged();
 }

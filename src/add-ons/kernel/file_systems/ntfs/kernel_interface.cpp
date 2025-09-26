@@ -63,8 +63,11 @@ fs_identify_partition(int fd, partition_data* partition, void** _cookie)
 		return -1;
 	}
 
+	if (strncmp(((const char*)&boot) + 3, "NTFS", 4) != 0)
+		return -1;
+
 	if (!ntfs_boot_sector_is_ntfs(&boot)) {
-		ERROR("identify_partition: boot signature doesn't match\n");
+		ERROR("identify_partition: boot signature invalid\n");
 		return -1;
 	}
 
@@ -257,6 +260,8 @@ fs_unmount(fs_volume* _volume)
 
 	if (ntfs_umount(volume->ntfs, false) < 0)
 		return errno;
+
+	put_vnode(_volume, FILE_root);
 
 	delete volume;
 	_volume->private_volume = NULL;
@@ -476,7 +481,7 @@ fs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	if (pos < 0 || pos >= ni->data_size)
@@ -516,7 +521,7 @@ fs_write_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	if (pos < 0 || pos >= ni->data_size)
@@ -638,7 +643,7 @@ fs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat, uint
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	bool updateTime = false;
@@ -939,7 +944,7 @@ fs_write(fs_volume* _volume, fs_vnode* _node, void* _cookie, off_t pos,
 
 
 static status_t
-fs_fsync(fs_volume* _volume, fs_vnode* _node)
+fs_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	CALLED();
 	vnode* node = (vnode*)_node->private_node;
@@ -1391,6 +1396,7 @@ static file_system_module_info sNtfsFileSystem = {
 	0
 	| B_DISK_SYSTEM_IS_FILE_SYSTEM
 	| B_DISK_SYSTEM_SUPPORTS_INITIALIZING
+	| B_DISK_SYSTEM_SUPPORTS_CONTENT_NAME
 	| B_DISK_SYSTEM_SUPPORTS_WRITING
 	,
 

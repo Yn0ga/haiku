@@ -104,6 +104,7 @@ const struct supported_device {
 	{0x0412, INTEL_MODEL_HAS, "Haswell GT2 Desktop"},
 	{0x0416, INTEL_MODEL_HASM, "Haswell GT2 Mobile"},
 	{0x0a16, INTEL_MODEL_HASM, "Haswell ULT GT2 Mobile"},
+	{0x0a2e, INTEL_MODEL_HASM, "Haswell ULT GT3 Mobile"},
 	{0x0d26, INTEL_MODEL_HASM, "Haswell CRW GT3 Mobile"},
 
 #if 0
@@ -147,6 +148,9 @@ const struct supported_device {
 	{0x1926, INTEL_MODEL_SKYM, "Skylake GT3"},
 	{0x192a, INTEL_MODEL_SKYS, "Skylake GT3"},
 	{0x192b, INTEL_MODEL_SKY,  "Skylake GT3"},
+
+	{0x5a84, INTEL_MODEL_KBYM, "Apollo Lake GT1.5"},
+	{0x5a85, INTEL_MODEL_KBYM, "Apollo Lake GT1"},
 
 	{0x5906, INTEL_MODEL_KBY,  "Kabylake ULT GT1"},
 	{0x5902, INTEL_MODEL_KBY,  "Kabylake DT GT1"},
@@ -207,6 +211,10 @@ const struct supported_device {
 	{0x9a60, INTEL_MODEL_TGLM,	"TigerLake"},
 	{0x9a68, INTEL_MODEL_TGLM,	"TigerLake"},
 	{0x9a70, INTEL_MODEL_TGLM,	"TigerLake"},
+
+	{0x46a6, INTEL_MODEL_ALDM,  "Alder Lake-P GT2"},
+	{0x46d1, INTEL_MODEL_ALDM,  "Alder Lake-N"},
+
 };
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
@@ -297,6 +305,9 @@ detect_intel_pch()
 			case INTEL_PCH_CNP_LP_DEVICE_ID:
 				ERROR("%s: Found Cannon Lake PCH\n", __func__);
 				return INTEL_PCH_CNP;
+			case INTEL_PCH_APL_LP_DEVICE_ID:
+				ERROR("%s: Found Apollo Lake PCH\n", __func__);
+				return INTEL_PCH_CNP;
 			case INTEL_PCH_CMP_DEVICE_ID:
 			case INTEL_PCH_CMP2_DEVICE_ID:
 				ERROR("%s: Found Comet Lake PCH\n", __func__);
@@ -322,6 +333,7 @@ detect_intel_pch()
 			case INTEL_PCH_ADP2_DEVICE_ID:
 			case INTEL_PCH_ADP3_DEVICE_ID:
 			case INTEL_PCH_ADP4_DEVICE_ID:
+			case INTEL_PCH_ADP5_DEVICE_ID:
 				ERROR("%s: Found Alder Lake PCH\n", __func__);
 				return INTEL_PCH_ADP;
 		}

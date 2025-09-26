@@ -1,5 +1,5 @@
 /*
- * Copyright 2007-2022, Haiku, Inc. All rights reserved.
+ * Copyright 2007-2025 Haiku, Inc. All rights reserved.
  * Copyright (c) 2004 Daniel Furrer <assimil8or@users.sourceforge.net>
  * Copyright (c) 2003-2004 Kian Duffy <myob@users.sourceforge.net>
  * Copyright (C) 1998,99 Kazuho Okui and Takashi Murai.
@@ -26,10 +26,11 @@
 #include <Alert.h>
 #include <Application.h>
 #include <Catalog.h>
-#include <ControlLook.h>
 #include <CharacterSet.h>
 #include <CharacterSetRoster.h>
 #include <Clipboard.h>
+#include <ColorListView.h>
+#include <ControlLook.h>
 #include <Dragger.h>
 #include <File.h>
 #include <FindDirectory.h>
@@ -50,8 +51,8 @@
 #include <ScrollBar.h>
 #include <ScrollView.h>
 #include <String.h>
-#include <UnicodeChar.h>
 #include <UTF8.h>
+#include <UnicodeChar.h>
 
 #include <AutoLocker.h>
 
@@ -180,9 +181,9 @@ struct TermWindow::Session {
 // #pragma mark - TermWindow
 
 
-TermWindow::TermWindow(const BString& title, Arguments* args)
+TermWindow::TermWindow(const Arguments& args)
 	:
-	BWindow(BRect(0, 0, 0, 0), title, B_DOCUMENT_WINDOW,
+	BWindow(BRect(0, 0, 0, 0), args.Title(), B_DOCUMENT_WINDOW,
 		B_CURRENT_WORKSPACE | B_QUIT_ON_WINDOW_CLOSE),
 	fTitleUpdateRunner(this, BMessage(kUpdateTitles), 1000000),
 	fNextSessionID(0),
@@ -215,7 +216,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 	get_key_map(&fKeymap, &fKeymapChars);
 
 	// apply the title settings
-	fTitle.pattern = title;
+	fTitle.pattern = args.Title();
 	if (fTitle.pattern.Length() == 0) {
 		fTitle.pattern = B_TRANSLATE_SYSTEM_NAME("Terminal");
 
@@ -227,7 +228,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 		fTitle.patternUserDefined = true;
 
 	fTitle.title = fTitle.pattern;
-	fTitle.pattern = title;
+	fTitle.pattern = args.Title();
 
 	_TitleSettingsChanged();
 
@@ -258,7 +259,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 
 	// init the GUI and add a tab
 	_InitWindow();
-	_AddTab(args);
+	_AddTab(&args, args.WorkingDir());
 
 	// Announce our window as no longer minimized. That's not true, since it's
 	// still hidden at this point, but it will be shown very soon.
@@ -560,12 +561,12 @@ TermWindow::_SetupMenu()
 
 	BKeymap keymap;
 	keymap.SetToCurrent();
-	BObjectList<const char> unmodified(3, true);
-	if (keymap.GetModifiedCharacters("+", B_SHIFT_KEY, 0, &unmodified)
+	BStringList unmodified(3);
+	if (keymap.GetModifiedCharacters("+", B_SHIFT_KEY, 0, unmodified)
 			== B_OK) {
-		int32 count = unmodified.CountItems();
+		int32 count = unmodified.CountStrings();
 		for (int32 i = 0; i < count; i++) {
-			uint32 key = BUnicodeChar::FromUTF8(unmodified.ItemAt(i));
+			uint32 key = BUnicodeChar::FromUTF8(unmodified.StringAt(i));
 			if (!HasShortcut(key, 0)) {
 				// Add semantic + shortcut, bug #7428
 				AddShortcut(key, B_COMMAND_KEY,
@@ -706,6 +707,9 @@ TermWindow::MessageReceived(BMessage *message)
 	int32 encodingId;
 	bool findresult;
 
+	if (message->WasDropped())
+		_SetTermColors();
+
 	switch (message->what) {
 		case B_KEY_MAP_LOADED:
 			_UpdateKeymap();
@@ -745,19 +749,22 @@ TermWindow::MessageReceived(BMessage *message)
 		{
 			// Set our current working directory to that of the active tab, so
 			// that the new terminal and its shell inherit it.
-			// Note: That's a bit lame. We should rather fork() and change the
-			// CWD in the child, but since ATM there aren't any side effects of
-			// changing our CWD, we save ourselves the trouble.
+			const char* argv[] = {NULL, NULL, NULL};
+			int32 argc = 0;
+
 			ActiveProcessInfo activeProcessInfo;
-			if (_ActiveTermView()->GetActiveProcessInfo(activeProcessInfo))
-				chdir(activeProcessInfo.CurrentDirectory());
+			if (_ActiveTermView()->GetActiveProcessInfo(activeProcessInfo)) {
+				argv[0] = "-w";
+				argv[1] = activeProcessInfo.CurrentDirectory();
+				argc = 2;
+			}
 
 			app_info info;
 			be_app->GetAppInfo(&info);
 
 			// try launching two different ways to work around possible problems
-			if (be_roster->Launch(&info.ref) != B_OK)
-				be_roster->Launch(TERM_SIGNATURE);
+			if (be_roster->Launch(&info.ref, argc, argv) != B_OK)
+				be_roster->Launch(TERM_SIGNATURE, argc, argv);
 			break;
 		}
 
@@ -1003,18 +1010,10 @@ TermWindow::MessageReceived(BMessage *message)
 			break;
 
 		case MSG_COLOR_SCHEME_CHANGED:
-		case MSG_SET_CURRENT_COLOR:
-		case MSG_SET_COLOR:
 		case MSG_UPDATE_COLOR:
-		{
-			for (int32 i = fTabView->CountTabs() - 1; i >= 0; i--) {
-				TermViewContainerView* container = _TermViewContainerViewAt(i);
-				_SetTermColors(container);
-				container->Invalidate();
-			}
-			_ActiveTermView()->Invalidate();
+			_SetTermColors();
 			break;
-		}
+
 		case MSG_SAVE_AS_DEFAULT:
 		{
 			BPath path;
@@ -1221,6 +1220,19 @@ TermWindow::WindowActivated(bool activated)
 
 
 void
+TermWindow::_SetTermColors()
+{
+	for (int32 index = fTabView->CountTabs() - 1; index >= 0; index--) {
+		TermViewContainerView* container = _TermViewContainerViewAt(index);
+		_SetTermColors(container);
+		container->Invalidate();
+	}
+
+	_ActiveTermView()->Invalidate();
+}
+
+
+void
 TermWindow::_SetTermColors(TermViewContainerView* containerView)
 {
 	PrefHandler* handler = PrefHandler::Default();
@@ -1332,7 +1344,7 @@ TermWindow::_NewTab()
 
 
 void
-TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
+TermWindow::_AddTab(const Arguments* args, const BString& currentDirectory)
 {
 	int argc = 0;
 	const char* const* argv = NULL;
@@ -1793,15 +1805,19 @@ TermWindow::MakeWindowSizeMenu(BMenu* menu)
 	};
 
 	const int32 sizeNum = sizeof(windowSizes) / sizeof(windowSizes[0]);
+	BString label;
+
 	for (int32 i = 0; i < sizeNum; i++) {
-		char label[32];
 		int32 columns = windowSizes[i][0];
 		int32 rows = windowSizes[i][1];
-		snprintf(label, sizeof(label), "%" B_PRId32 " × %" B_PRId32, columns, rows);
+
+		label.SetToFormat("%" B_PRId32 " × %" B_PRId32, columns, rows);
+
 		BMessage* message = new BMessage(MSG_COLS_CHANGED);
 		message->AddInt32("columns", columns);
 		message->AddInt32("rows", rows);
-		menu->AddItem(new BMenuItem(label, message));
+
+		menu->AddItem(new BMenuItem(label.String(), message));
 	}
 }
 

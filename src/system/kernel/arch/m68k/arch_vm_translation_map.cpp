@@ -13,7 +13,7 @@
 #include <vm/vm.h>
 #include <vm/vm_priv.h>
 #include <vm/VMAddressSpace.h>
-#include <int.h>
+#include <interrupts.h>
 #include <boot/kernel_args.h>
 #include <arch/vm_translation_map.h>
 #include <arch/cpu.h>
@@ -144,11 +144,11 @@ arch_vm_translation_map_init_post_area(kernel_args *args)
  */
 status_t
 arch_vm_translation_map_early_map(kernel_args *args, addr_t va, phys_addr_t pa,
-	uint8 attributes, phys_addr_t (*get_free_page)(kernel_args *))
+	uint8 attributes)
 {
 	TRACE("early_tmap: entry pa 0x%lx va 0x%lx\n", pa, va);
 
-	return gM68KPagingMethod->MapEarly(args, va, pa, attributes, get_free_page);
+	return gM68KPagingMethod->MapEarly(args, va, pa, attributes);
 }
 
 

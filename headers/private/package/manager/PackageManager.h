@@ -53,10 +53,10 @@ public:
 			class ClientInstallationInterface;
 			class UserInteractionHandler;
 
-			typedef BObjectList<RemoteRepository> RemoteRepositoryList;
+			typedef BObjectList<RemoteRepository, true> RemoteRepositoryList;
 			typedef BObjectList<InstalledRepository> InstalledRepositoryList;
 			typedef BObjectList<BSolverPackage> PackageList;
-			typedef BObjectList<Transaction> TransactionList;
+			typedef BObjectList<Transaction, true> TransactionList;
 
 			enum {
 				B_ADD_INSTALLED_REPOSITORIES	= 0x01,
@@ -91,9 +91,9 @@ public:
 									{ return fOtherRepositories; }
 
 			void				Install(const char* const* packages,
-									int packageCount);
+									int packageCount, bool refresh = true);
 			void				Install(const BSolverPackageSpecifierList&
-									packages);
+									packages, bool refresh = true);
 			void				Uninstall(const char* const* packages,
 									int packageCount);
 			void				Uninstall(const BSolverPackageSpecifierList&
@@ -245,7 +245,7 @@ public:
 			void				ApplyChanges();
 
 private:
-			PackageList			fDisabledPackages;
+			BObjectList<BSolverPackage, true> fDisabledPackages;
 			PackageList			fPackagesToActivate;
 			PackageList			fPackagesToDeactivate;
 			const char*			fInitialName;

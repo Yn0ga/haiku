@@ -27,7 +27,7 @@ static void _mutex_unlock(struct mutex* lock);
 #include <stdlib.h>
 #include <string.h>
 
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <listeners.h>
 #include <scheduling_analysis.h>
@@ -320,6 +320,7 @@ rw_lock_wait(rw_lock* lock, bool writer, InterruptsSpinLocker& locker)
 	status_t result = thread_block();
 
 	locker.Lock();
+	ASSERT(result != B_OK || waiter.thread == NULL);
 	return result;
 }
 
@@ -347,8 +348,8 @@ rw_lock_unblock(rw_lock* lock)
 
 		// unblock thread
 		thread_unblock(waiter->thread, B_OK);
-
 		waiter->thread = NULL;
+
 		return RW_LOCK_WRITER_COUNT_BASE;
 	}
 
@@ -364,7 +365,6 @@ rw_lock_unblock(rw_lock* lock)
 
 		// unblock thread
 		thread_unblock(waiter->thread, B_OK);
-
 		waiter->thread = NULL;
 	} while ((waiter = lock->waiters) != NULL && !waiter->writer);
 
@@ -880,7 +880,7 @@ mutex_destroy(mutex* lock)
 #if KDEBUG
 	if (lock->holder != -1 && thread_get_current_thread_id() != lock->holder) {
 		panic("mutex_destroy(): the lock (%p) is held by %" B_PRId32 ", not "
-			"by the caller", lock, lock->holder);
+			"by the caller @! bt %" B_PRId32, lock, lock->holder, lock->holder);
 		if (_mutex_lock(lock, &locker) != B_OK)
 			return;
 		locker.Lock();

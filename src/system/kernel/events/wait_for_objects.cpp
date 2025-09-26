@@ -363,34 +363,27 @@ fd_zero(fd_set *set, int numFDs)
 static status_t
 create_select_sync(int numFDs, wait_for_objects_sync*& _sync)
 {
-	// create sync structure
 	wait_for_objects_sync* sync = new(nothrow) wait_for_objects_sync;
 	if (sync == NULL)
 		return B_NO_MEMORY;
 	ObjectDeleter<wait_for_objects_sync> syncDeleter(sync);
 
-	// create info set
 	sync->set = new(nothrow) select_info[numFDs];
 	if (sync->set == NULL)
 		return B_NO_MEMORY;
-	ArrayDeleter<select_info> setDeleter(sync->set);
+	sync->count = numFDs;
 
-	// create select event semaphore
 	sync->sem = create_sem(0, "select");
 	if (sync->sem < 0)
 		return sync->sem;
-
-	sync->count = numFDs;
 
 	for (int i = 0; i < numFDs; i++) {
 		sync->set[i].next = NULL;
 		sync->set[i].sync = sync;
 	}
 
-	setDeleter.Detach();
 	syncDeleter.Detach();
 	_sync = sync;
-
 	return B_OK;
 }
 
@@ -949,7 +942,7 @@ check_max_fds(int numFDs)
 		return true;
 
 	struct io_context *context = get_current_io_context(false);
-	MutexLocker(&context->io_mutex);
+	ReadLocker locker(&context->lock);
 	return (size_t)numFDs <= context->table_size;
 }
 
@@ -968,7 +961,7 @@ _user_select(int numFDs, fd_set *userReadSet, fd_set *userWriteSet,
 			timeout = B_INFINITE_TIMEOUT;
 	}
 
-	if (numFDs < 0 || !check_max_fds(numFDs))
+	if (numFDs < 0 || (numFDs > FD_SETSIZE && !check_max_fds(numFDs)))
 		return B_BAD_VALUE;
 
 	if ((userReadSet != NULL && !IS_USER_ADDRESS(userReadSet))

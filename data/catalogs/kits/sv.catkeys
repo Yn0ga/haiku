@@ -1,4 +1,4 @@
-1	swedish	x-vnd.Haiku-libbe	1445751563
+1	swedish	x-vnd.Haiku-libbe	310849835
 All Rights Reserved.	AboutWindow		Alla rättigheter resarverade.
 gold master	AboutWindow		guld mästare
 Undo	TextView		Ångra
@@ -24,7 +24,6 @@ Error	ZombieReplicantView		Fel
 Paste	TextView		Klistra in
 OK	AboutWindow		OK
 %s MiB/s	StringForRate	units per second	%s MiB/s
-Special Thanks:	AboutWindow		Särskilt tack till:
 %s TiB	StringForSize	size unit	%s TiB
 Default Haiku window decorator.	Default decorator about box		Standard Haiku window decorator.
 %s GiB	StringForSize	size unit	%s GiB
@@ -46,5 +45,6 @@ Version history:	AboutWindow		Versionshistorik:
 Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Kan inte hitta programmet för replikanten. Ingen programsignatur är angiven.\n%error
 %s KiB/s	StringForRate	units per second	%s KiB/s
 Blue:	ColorControl		Blå:
+Special thanks:	AboutWindow		Speciellt tack:
 Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kan inte skapa replikanten för \"%description\".\n%error
 Written by:	AboutWindow		Skrivet av:

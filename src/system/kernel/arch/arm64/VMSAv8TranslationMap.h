@@ -57,12 +57,11 @@ public:
 	virtual	status_t			Unmap(addr_t start, addr_t end);
 
 	virtual	status_t			UnmapPage(VMArea* area, addr_t address,
-									bool updatePageQueue);
+									bool updatePageQueue,
+									bool deletingAddressSpace, uint32* _flags);
 	virtual	void				UnmapPages(VMArea* area, addr_t base,
-									size_t size, bool updatePageQueue);
-	virtual	void				UnmapArea(VMArea* area,
-									bool deletingAddressSpace,
-									bool ignoreTopCachePageFlags);
+									size_t size, bool updatePageQueue,
+									bool deletingAddressSpace);
 
 	virtual	status_t			Query(addr_t virtualAddress,
 									phys_addr_t* _physicalAddress,
@@ -115,7 +114,7 @@ private:
 	static uint8_t MairIndex(uint8_t type);
 	bool ValidateVa(addr_t va);
 	uint64_t* TableFromPa(phys_addr_t pa);
-	void FreeTable(phys_addr_t ptPa, uint64_t va, int level);
+	void FreeTable(phys_addr_t ptPa, uint64_t va, int level, vm_page_reservation* reservation);
 	phys_addr_t GetOrMakeTable(phys_addr_t ptPa, int level, int index, vm_page_reservation* reservation);
 	template<typename UpdatePte>
 	void ProcessRange(phys_addr_t ptPa, int level, addr_t va, size_t size,

@@ -165,7 +165,7 @@ struct fssh_fs_vnode_ops {
 				fssh_fs_cookie cookie, uint8_t event, fssh_selectsync *sync);
 	fssh_status_t (*deselect)(fssh_fs_volume *volume, fssh_fs_vnode *vnode,
 				fssh_fs_cookie cookie, uint8_t event, fssh_selectsync *sync);
-	fssh_status_t (*fsync)(fssh_fs_volume *volume, fssh_fs_vnode *vnode);
+	fssh_status_t (*fsync)(fssh_fs_volume *volume, fssh_fs_vnode *vnode, bool dataOnly);
 
 	fssh_status_t (*read_symlink)(fssh_fs_volume *volume, fssh_fs_vnode *link,
 				char *buffer, fssh_size_t *_bufferSize);
@@ -364,6 +364,9 @@ extern fssh_fs_volume* fssh_volume_for_vnode(fssh_fs_vnode *vnode);
 extern fssh_status_t fssh_check_access_permissions(int accessMode,
 				fssh_mode_t mode, fssh_gid_t nodeGroupID,
 				fssh_uid_t nodeUserID);
+extern fssh_status_t fssh_check_write_stat_permissions(fssh_gid_t nodeGroupID,
+				fssh_uid_t nodeUserID, fssh_mode_t nodeMode, uint32_t mask,
+				const struct fssh_stat* stat);
 
 extern fssh_status_t fssh_read_pages(int fd, fssh_off_t pos,
 				const struct fssh_iovec *vecs, fssh_size_t count,
@@ -404,14 +407,18 @@ extern fssh_status_t fssh_notify_query_entry_created(fssh_port_id port,
 				int32_t token, fssh_mount_id device,
 				fssh_vnode_id directory, const char *name,
 				fssh_vnode_id node);
+extern fssh_status_t fssh_notify_query_entry_moved(fssh_port_id port, int32_t token,
+				fssh_mount_id device, fssh_vnode_id fromDirectory,
+				const char* fromName, fssh_vnode_id toDirectory,
+				const char* toName, fssh_vnode_id node);
 extern fssh_status_t fssh_notify_query_entry_removed(fssh_port_id port,
 				int32_t token, fssh_mount_id device,
 				fssh_vnode_id directory, const char *name,
 				fssh_vnode_id node);
-extern fssh_status_t fssh_notify_query_attr_changed(fssh_port_id port,
+extern fssh_status_t fssh_notify_query_attribute_changed(fssh_port_id port,
 				int32_t token, fssh_mount_id device,
-				fssh_vnode_id directory, const char *name,
-				fssh_vnode_id node);
+				fssh_vnode_id directory, fssh_vnode_id node,
+				const char *attribute, int32_t cause);
 
 #ifdef __cplusplus
 }

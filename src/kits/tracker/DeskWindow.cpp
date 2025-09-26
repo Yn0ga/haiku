@@ -35,6 +35,7 @@ All rights reserved.
 
 #include "DeskWindow.h"
 
+#include <AppFileInfo.h>
 #include <Catalog.h>
 #include <Debug.h>
 #include <FindDirectory.h>
@@ -64,8 +65,9 @@ All rights reserved.
 #include "KeyInfos.h"
 #include "MountMenu.h"
 #include "PoseView.h"
-#include "Tracker.h"
+#include "Shortcuts.h"
 #include "TemplatesMenu.h"
+#include "Tracker.h"
 
 
 const char* kShelfPath = "tracker_shelf";
@@ -76,8 +78,8 @@ const char* kDefaultShortcut = "BEOS:default_shortcut";
 const uint32 kDefaultModifiers = B_OPTION_KEY | B_COMMAND_KEY;
 
 
-static struct AddOnShortcut*
-MatchOne(struct AddOnShortcut* item, void* castToName)
+static struct AddOnInfo*
+MatchOne(struct AddOnInfo* item, void* castToName)
 {
 	if (strcmp(item->model->Name(), (const char*)castToName) == 0) {
 		// found match, bail out
@@ -100,8 +102,8 @@ AddOneShortcut(Model* model, char key, uint32 modifiers, BDeskWindow* window)
 }
 
 
-static struct AddOnShortcut*
-RevertToDefault(struct AddOnShortcut* item, void* castToWindow)
+static struct AddOnInfo*
+RevertToDefault(struct AddOnInfo* item, void* castToWindow)
 {
 	if (item->key != item->defaultKey || item->modifiers != kDefaultModifiers) {
 		BDeskWindow* window = static_cast<BDeskWindow*>(castToWindow);
@@ -117,8 +119,8 @@ RevertToDefault(struct AddOnShortcut* item, void* castToWindow)
 }
 
 
-static struct AddOnShortcut*
-FindElement(struct AddOnShortcut* item, void* castToOther)
+static struct AddOnInfo*
+FindElement(struct AddOnInfo* item, void* castToOther)
 {
 	Model* other = static_cast<Model*>(castToOther);
 	if (*item->model->EntryRef() == *other->EntryRef())
@@ -130,7 +132,7 @@ FindElement(struct AddOnShortcut* item, void* castToOther)
 
 static void
 LoadAddOnDir(BDirectory directory, BDeskWindow* window,
-	LockingList<AddOnShortcut>* list)
+	LockingList<AddOnInfo, true>* list)
 {
 	BEntry entry;
 	while (directory.GetNextEntry(&entry) == B_OK) {
@@ -151,8 +153,10 @@ LoadAddOnDir(BDirectory directory, BDeskWindow* window,
 
 		char* name = strdup(model->Name());
 		if (!list->EachElement(MatchOne, name)) {
-			struct AddOnShortcut* item = new struct AddOnShortcut;
+			struct AddOnInfo* item = new struct AddOnInfo;
 			item->model = model;
+
+			item->has_populate_menu = B_NO_INIT;
 
 			BResources resources(model->ResolveIfLink()->EntryRef());
 			size_t size;
@@ -166,6 +170,23 @@ LoadAddOnDir(BDirectory directory, BDeskWindow* window,
 			item->defaultKey = item->key;
 			item->modifiers = kDefaultModifiers;
 			list->AddItem(item);
+
+			// load supported types (if any)
+			BFile file(item->model->EntryRef(), B_READ_ONLY);
+			if (file.InitCheck() == B_OK) {
+				BAppFileInfo info(&file);
+				if (info.InitCheck() == B_OK) {
+					BMessage types;
+					if (info.GetSupportedTypes(&types) == B_OK) {
+						int32 i = 0;
+						BString supportedType;
+						while (types.FindString("types", i, &supportedType) == B_OK) {
+							item->supportedTypes.Add(supportedType);
+							i++;
+						}
+					}
+				}
+			}
 		}
 		free(name);
 	}
@@ -186,31 +207,25 @@ LoadAddOnDir(BDirectory directory, BDeskWindow* window,
 
 BDeskWindow::BDeskWindow(LockingList<BWindow>* windowList, uint32 openFlags)
 	:
-	BContainerWindow(windowList, openFlags,
-		kDesktopWindowLook, kDesktopWindowFeel,
-		B_NOT_MOVABLE | B_WILL_ACCEPT_FIRST_CLICK
-			| B_NOT_ZOOMABLE | B_NOT_CLOSABLE | B_NOT_MINIMIZABLE
-			| B_NOT_RESIZABLE | B_ASYNCHRONOUS_CONTROLS,
-		B_ALL_WORKSPACES, false, true),
+	BContainerWindow(windowList, openFlags, kDesktopWindowLook, kDesktopWindowFeel,
+		B_NOT_MOVABLE | B_WILL_ACCEPT_FIRST_CLICK | B_NOT_ZOOMABLE | B_NOT_CLOSABLE
+			| B_NOT_MINIMIZABLE | B_NOT_RESIZABLE | B_ASYNCHRONOUS_CONTROLS,
+		B_ALL_WORKSPACES, false),
 	fDeskShelf(NULL),
 	fNodeRef(NULL),
 	fShortcutsSettings(NULL)
 {
-	// Add icon view switching shortcuts. These are displayed in the context
-	// menu, although they obviously don't work from those menu items.
-	BMessage* message = new BMessage(kIconMode);
-	AddShortcut('1', B_COMMAND_KEY, message, PoseView());
-
-	message = new BMessage(kMiniIconMode);
-	AddShortcut('2', B_COMMAND_KEY, message, PoseView());
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("scale", 1);
-	AddShortcut('+', B_COMMAND_KEY, message, PoseView());
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("scale", 0);
-	AddShortcut('-', B_COMMAND_KEY, message, PoseView());
+	// create pose view
+	BDirectory deskDir;
+	if (FSGetDeskDir(&deskDir) == B_OK) {
+		BEntry entry;
+		deskDir.GetEntry(&entry);
+		Model* model = new Model(&entry, true);
+		if (model->InitCheck() == B_OK)
+			CreatePoseView(model);
+		else
+			delete model;
+	}
 }
 
 
@@ -256,27 +271,60 @@ BDeskWindow::Init(const BMessage*)
 		if (fDeskShelf != NULL)
 			fDeskShelf->SetDisplaysZombies(true);
 	}
+
+	// Add icon view switching shortcuts. These are displayed in the context
+	// menu, although they obviously don't work from those menu items.
+	BMessage* message = new BMessage(kIconMode);
+	AddShortcut('1', B_COMMAND_KEY, message, PoseView());
+
+	message = new BMessage(kMiniIconMode);
+	AddShortcut('2', B_COMMAND_KEY, message, PoseView());
+
+	message = new BMessage(kIconMode);
+	message->AddInt32("scale", 1);
+	AddShortcut('+', B_COMMAND_KEY, message, PoseView());
+
+	message = new BMessage(kIconMode);
+	message->AddInt32("scale", 0);
+	AddShortcut('-', B_COMMAND_KEY, message, PoseView());
+
+	if (TrackerSettings().ShowDisksIcon()) {
+		// create model for root of everything
+		BEntry entry("/");
+		Model model(&entry);
+		if (model.InitCheck() == B_OK) {
+			// add the root icon to desktop window
+			BMessage message;
+			message.what = B_NODE_MONITOR;
+			message.AddInt32("opcode", B_ENTRY_CREATED);
+			message.AddInt32("device", model.NodeRef()->device);
+			message.AddInt64("node", model.NodeRef()->node);
+			message.AddInt64("directory", model.EntryRef()->directory);
+			message.AddString("name", model.EntryRef()->name);
+
+			PostMessage(&message, PoseView());
+		}
+	}
 }
 
 
 void
 BDeskWindow::InitAddOnsList(bool update)
 {
-	AutoLock<LockingList<AddOnShortcut> > lock(fAddOnsList);
+	AutoLock<LockingList<AddOnInfo, true> > lock(fAddOnsList);
 	if (!lock.IsLocked())
 		return;
 
 	if (update) {
 		for (int i = fAddOnsList->CountItems() - 1; i >= 0; i--) {
-			AddOnShortcut* item = fAddOnsList->ItemAt(i);
+			AddOnInfo* item = fAddOnsList->ItemAt(i);
 			RemoveShortcut(item->key, B_OPTION_KEY | B_COMMAND_KEY);
 		}
 		fAddOnsList->MakeEmpty(true);
 	}
 
 	BStringList addOnPaths;
-	BPathFinder::FindPaths(B_FIND_PATH_ADD_ONS_DIRECTORY, "Tracker",
-		addOnPaths);
+	BPathFinder::FindPaths(B_FIND_PATH_ADD_ONS_DIRECTORY, "Tracker", addOnPaths);
 	int32 count = addOnPaths.CountStrings();
 	for (int32 i = 0; i < count; i++)
 		LoadAddOnDir(BDirectory(addOnPaths.StringAt(i)), this, fAddOnsList);
@@ -286,7 +334,7 @@ BDeskWindow::InitAddOnsList(bool update)
 void
 BDeskWindow::ApplyShortcutPreferences(bool update)
 {
-	AutoLock<LockingList<AddOnShortcut> > lock(fAddOnsList);
+	AutoLock<LockingList<AddOnInfo, true> > lock(fAddOnsList);
 	if (!lock.IsLocked())
 		return;
 
@@ -327,8 +375,7 @@ BDeskWindow::ApplyShortcutPreferences(bool update)
 		bool isInAddOns = false;
 
 		BStringList addOnPaths;
-		BPathFinder::FindPaths(B_FIND_PATH_ADD_ONS_DIRECTORY,
-			"Tracker/", addOnPaths);
+		BPathFinder::FindPaths(B_FIND_PATH_ADD_ONS_DIRECTORY, "Tracker/", addOnPaths);
 		for (int32 i = 0; i < addOnPaths.CountStrings(); i++) {
 			if (command.StartsWith(addOnPaths.StringAt(i))) {
 				isInAddOns = true;
@@ -361,7 +408,7 @@ BDeskWindow::ApplyShortcutPreferences(bool update)
 			modifiers |= (value != 0 ? B_OPTION_KEY : 0);
 
 		Model model(&entry);
-		AddOnShortcut* item = fAddOnsList->EachElement(FindElement, &model);
+		AddOnInfo* item = fAddOnsList->EachElement(FindElement, &model);
 		if (item != NULL) {
 			if (item->key != '\0')
 				RemoveShortcut(item->key, item->modifiers);
@@ -434,92 +481,6 @@ BDeskWindow::CreatePoseView(Model* model)
 	AddChild(fPoseView);
 
 	PoseView()->StartSettingsWatch();
-}
-
-
-void
-BDeskWindow::AddWindowContextMenus(BMenu* menu)
-{
-	TemplatesMenu* tempateMenu = new TemplatesMenu(PoseView(),
-		B_TRANSLATE("New"));
-
-	menu->AddItem(tempateMenu);
-	tempateMenu->SetTargetForItems(PoseView());
-
-	menu->AddSeparatorItem();
-
-	BMenu* iconSizeMenu = new BMenu(B_TRANSLATE("Icon view"));
-	BMenuItem* item;
-
-	static const uint32 kIconSizes[] = { 32, 40, 48, 64, 96, 128 };
-	BMessage* message;
-
-	for (uint32 i = 0; i < sizeof(kIconSizes) / sizeof(uint32); ++i) {
-		uint32 iconSize = kIconSizes[i];
-		message = new BMessage(kIconMode);
-		message->AddInt32("size", iconSize);
-		BString label;
-		label.SetToFormat(B_TRANSLATE_COMMENT("%" B_PRId32" × %" B_PRId32,
-			"The '×' is the Unicode multiplication sign U+00D7"),
-			iconSize, iconSize);
-		item = new BMenuItem(label, message);
-		item->SetMarked(PoseView()->IconSizeInt() == iconSize);
-		item->SetTarget(PoseView());
-		iconSizeMenu->AddItem(item);
-	}
-
-	iconSizeMenu->AddSeparatorItem();
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("scale", 0);
-	item = new BMenuItem(B_TRANSLATE("Decrease size"), message, '-');
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("scale", 1);
-	item = new BMenuItem(B_TRANSLATE("Increase size"), message, '+');
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	// A sub menu where the super item can be invoked.
-	menu->AddItem(iconSizeMenu);
-	iconSizeMenu->Superitem()->SetShortcut('1', B_COMMAND_KEY);
-	iconSizeMenu->Superitem()->SetMessage(new BMessage(kIconMode));
-	iconSizeMenu->Superitem()->SetTarget(PoseView());
-	iconSizeMenu->Superitem()->SetMarked(PoseView()->ViewMode() == kIconMode);
-
-	item = new BMenuItem(B_TRANSLATE("Mini icon view"),
-		new BMessage(kMiniIconMode), '2');
-	item->SetMarked(PoseView()->ViewMode() == kMiniIconMode);
-	menu->AddItem(item);
-
-	menu->AddSeparatorItem();
-
-#ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
-	BMenuItem* pasteItem = new BMenuItem(B_TRANSLATE("Paste"),
-		new BMessage(B_PASTE), 'V');
-	menu->AddItem(pasteItem);
-	menu->AddSeparatorItem();
-#endif
-	menu->AddItem(new BMenuItem(B_TRANSLATE("Clean up"),
-		new BMessage(kCleanup), 'K'));
-	menu->AddItem(new BMenuItem(B_TRANSLATE("Select" B_UTF8_ELLIPSIS),
-		new BMessage(kShowSelectionWindow), 'A', B_SHIFT_KEY));
-	menu->AddItem(new BMenuItem(B_TRANSLATE("Select all"),
-		new BMessage(B_SELECT_ALL), 'A'));
-
-	menu->AddSeparatorItem();
-	menu->AddItem(new MountMenu(B_TRANSLATE("Mount")));
-
-	menu->AddSeparatorItem();
-	menu->AddItem(new BMenu(B_TRANSLATE("Add-ons")));
-
-	// target items as needed
-	menu->SetTargetForItems(PoseView());
-#ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
-	pasteItem->SetTarget(this);
-#endif
 }
 
 
@@ -642,10 +603,19 @@ BDeskWindow::MessageReceived(BMessage* message)
 			break;
 		}
 		case B_NODE_MONITOR:
+		{
 			PRINT(("will update addon shortcuts\n"));
 			InitAddOnsList(true);
 			ApplyShortcutPreferences(true);
+
+			// a Tracker add-on may have loaded/unloaded
+			TTracker* tracker = dynamic_cast<TTracker*>(be_app);
+			if (tracker != NULL) {
+				BMessage message(kRebuildAddOnMenus);
+				tracker->PostMessageToAllContainerWindows(message);
+			}
 			break;
+		}
 
 		default:
 			_inherited::MessageReceived(message);

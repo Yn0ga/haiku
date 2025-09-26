@@ -55,14 +55,13 @@ if [ FIsBuildFeatureEnabled fontconfig ] {
 	: [ BuildFeatureAttribute freetype : headers ] ;
 }
 
-Server app_server :
+Application app_server :
 	Angle.cpp
 	AppServer.cpp
 	#BitfieldRegion.cpp
 	BitmapManager.cpp
 	Canvas.cpp
 	ClientMemoryAllocator.cpp
-	CursorData.cpp
 	CursorManager.cpp
 	CursorSet.cpp
 	DelayedMessage.cpp

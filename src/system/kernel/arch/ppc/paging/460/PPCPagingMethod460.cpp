@@ -19,7 +19,7 @@
 #include <arch_mmu.h>
 #include <arch_system_info.h>
 #include <boot/kernel_args.h>
-#include <int.h>
+#include <interrupts.h>
 #include <thread.h>
 #include <vm/vm.h>
 #include <vm/VMAddressSpace.h>
@@ -236,8 +236,7 @@ PPCPagingMethod460::CreateTranslationMap(bool kernel, VMTranslationMap** _map)
 
 status_t
 PPCPagingMethod460::MapEarly(kernel_args* args, addr_t virtualAddress,
-	phys_addr_t physicalAddress, uint8 attributes,
-	page_num_t (*get_free_page)(kernel_args*))
+	phys_addr_t physicalAddress, uint8 attributes)
 {
 	uint32 virtualSegmentID = get_sr((void *)virtualAddress) & 0xffffff;
 

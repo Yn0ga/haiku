@@ -998,38 +998,55 @@ realloc(void* address, size_t newSize)
 }
 
 
+#endif	// USE_GUARDED_HEAP_FOR_MALLOC
+
+
 #if USE_GUARDED_HEAP_FOR_OBJECT_CACHE
 
 
 // #pragma mark - Slab API
 
 
-void
-request_memory_manager_maintenance()
+struct ObjectCache {
+	size_t object_size;
+	size_t alignment;
+
+	void* cookie;
+	object_cache_constructor constructor;
+	object_cache_destructor destructor;
+};
+
+
+object_cache*
+create_object_cache(const char* name, size_t object_size, uint32 flags)
 {
+	return create_object_cache_etc(name, object_size, 0, 0, 0, 0, flags,
+		NULL, NULL, NULL, NULL);
 }
 
 
 object_cache*
-create_object_cache(const char*, size_t objectSize, size_t, void*,
-	object_cache_constructor, object_cache_destructor)
-{
-	return (object_cache*)objectSize;
-}
-
-
-object_cache*
-create_object_cache_etc(const char*, size_t objectSize, size_t, size_t, size_t,
-	size_t, uint32, void*, object_cache_constructor, object_cache_destructor,
+create_object_cache_etc(const char*, size_t objectSize, size_t alignment, size_t, size_t,
+	size_t, uint32, void* cookie, object_cache_constructor ctor, object_cache_destructor dtor,
 	object_cache_reclaimer)
 {
-	return (object_cache*)objectSize;
+	ObjectCache* cache = new ObjectCache;
+	if (cache == NULL)
+		return NULL;
+
+	cache->object_size = objectSize;
+	cache->alignment = alignment;
+	cache->cookie = cookie;
+	cache->constructor = ctor;
+	cache->destructor = dtor;
+	return cache;
 }
 
 
 void
 delete_object_cache(object_cache* cache)
 {
+	delete cache;
 }
 
 
@@ -1043,13 +1060,21 @@ object_cache_set_minimum_reserve(object_cache* cache, size_t objectCount)
 void*
 object_cache_alloc(object_cache* cache, uint32 flags)
 {
-	return memalign_etc(0, (size_t)cache, flags);
+	void* object = memalign_etc(cache->alignment, cache->object_size, flags);
+	if (object == NULL)
+		return NULL;
+
+	if (cache->constructor != NULL)
+		cache->constructor(cache->cookie, object);
+	return object;
 }
 
 
 void
 object_cache_free(object_cache* cache, void* object, uint32 flags)
 {
+	if (cache->destructor != NULL)
+		cache->destructor(cache->cookie, object);
 	return free_etc(object, flags);
 }
 
@@ -1065,6 +1090,12 @@ void
 object_cache_get_usage(object_cache* cache, size_t* _allocatedMemory)
 {
 	*_allocatedMemory = 0;
+}
+
+
+void
+request_memory_manager_maintenance()
+{
 }
 
 
@@ -1093,6 +1124,3 @@ slab_init_post_thread()
 
 
 #endif	// USE_GUARDED_HEAP_FOR_OBJECT_CACHE
-
-
-#endif	// USE_GUARDED_HEAP_FOR_MALLOC

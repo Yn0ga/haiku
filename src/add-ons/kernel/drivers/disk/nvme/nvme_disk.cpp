@@ -191,20 +191,24 @@ nvme_disk_init_device(void* _info, void** _cookie)
 		return B_ERROR;
 	}
 
-	struct nvme_ctrlr_stat cstat;
-	int err = nvme_ctrlr_stat(info->ctrlr, &cstat);
+	struct nvme_ctrlr_stat* cstat = (struct nvme_ctrlr_stat*)malloc(sizeof(struct nvme_ctrlr_stat));
+	if (cstat == NULL)
+		return B_NO_MEMORY;
+	MemoryDeleter cstatDeleter(cstat);
+
+	int err = nvme_ctrlr_stat(info->ctrlr, cstat);
 	if (err != 0) {
 		TRACE_ERROR("failed to get controller information!\n");
 		nvme_ctrlr_close(info->ctrlr);
 		return err;
 	}
 
-	TRACE_ALWAYS("attached to NVMe device \"%s (%s)\"\n", cstat.mn, cstat.sn);
-	TRACE_ALWAYS("\tmaximum transfer size: %" B_PRIuSIZE "\n", cstat.max_xfer_size);
-	TRACE_ALWAYS("\tqpair count: %d\n", cstat.io_qpairs);
+	TRACE_ALWAYS("attached to NVMe device \"%s (%s)\"\n", cstat->mn, cstat->sn);
+	TRACE_ALWAYS("\tmaximum transfer size: %" B_PRIuSIZE "\n", cstat->max_xfer_size);
+	TRACE_ALWAYS("\tqpair count: %d\n", cstat->io_qpairs);
 
 	// TODO: export more than just the first namespace!
-	info->ns = nvme_ns_open(info->ctrlr, cstat.ns_ids[0]);
+	info->ns = nvme_ns_open(info->ctrlr, cstat->ns_ids[0]);
 	if (info->ns == NULL) {
 		TRACE_ERROR("failed to open namespace!\n");
 		nvme_ctrlr_close(info->ctrlr);
@@ -256,17 +260,86 @@ nvme_disk_init_device(void* _info, void** _cookie)
 	} else {
 		info->polling = 0;
 	}
-	info->interrupt.Init(NULL, NULL);
+	info->interrupt.Init(info, "nvme_disk interrupt");
 	install_io_interrupt_handler(irq, nvme_interrupt_handler, (void*)info, B_NO_HANDLED_INFO);
 
 	if (info->ctrlr->feature_supported[NVME_FEAT_INTERRUPT_COALESCING]) {
 		uint32 microseconds = 16, threshold = 32;
-		nvme_admin_set_feature(info->ctrlr, false, NVME_FEAT_INTERRUPT_COALESCING,
-			((microseconds / 100) << 8) | threshold, 0, NULL);
+		nvme_ctrlr_set_feature(info->ctrlr, false, NVME_FEAT_INTERRUPT_COALESCING,
+			((microseconds / 100) << 8) | threshold, 0, NULL, 0, NULL);
+	}
+
+	if (info->ctrlr->feature_supported[NVME_FEAT_AUTONOMOUS_POWER_STATE_TRANSITION]) {
+		// dump power states
+		struct nvme_ctrlr_data& cdata = info->ctrlr->cdata;
+		if (cdata.npss > 0 && cdata.npss < 31) {
+			TRACE_ALWAYS("\tpower states: %u\n", cdata.npss);
+			for (uint8 i = 0; i <= cdata.npss; i++) {
+				struct nvme_power_state	psd;
+				memcpy(&psd, &cdata.psd[i], sizeof(struct nvme_power_state));
+				TRACE_ALWAYS("\tps %u: mp:%fW %soperational enlat:%u exlat:%u rrt:%u rrl:%u\n",
+					i, psd.mp / (psd.mxps == 0 ? 100.0 : 10000.0),
+					psd.nops ? "non-" : "", psd.enlat, psd.exlat, psd.rrt, psd.rrl);
+				TRACE_ALWAYS("\trwt:%u rwl:%u idlp:%fW actp:%fW apw:%u\n", psd.rwt, psd.rwl,
+					psd.idlp / (psd.ips == 2 ? 100.0 : (psd.ips == 1 ? 10000.0 : 1.0)),
+					psd.actp / (psd.aps == 2 ? 100.0 : (psd.aps == 1 ? 10000.0 : 1.0)),
+					psd.apw);
+			}
+
+			uint32_t tableSize = 32 * sizeof(uint64);
+			uint64* table = (uint64*)malloc(tableSize);
+			memset(table, 0, tableSize);
+
+			// configure apst: the table is filled with two differents states which matches
+			// the behavior of the Linux driver, itself inspired by Intel/Windows drivers.
+			// a first state with a low latency power state and a second state with a higher
+			// latency power state. the feature is activated if at least one state is found.
+			uint64 target = 0;
+			bool firstStateSet = false;
+			bool secondStateSet = false;
+			for (uint8 i = cdata.npss; i > 0; i--) {
+				struct nvme_power_state	psd;
+				memcpy(&psd, &cdata.psd[i], sizeof(struct nvme_power_state));
+				if (psd.nops && psd.exlat <= 100000) {
+					uint32 totalLatency = psd.enlat + psd.exlat;
+					uint32 transitionTime = 0;
+					if (totalLatency < 100000 && !secondStateSet) {
+						secondStateSet = true;
+						transitionTime = 2000;
+					}
+					if (totalLatency < 15000 && secondStateSet && !firstStateSet) {
+						transitionTime = 100;
+						firstStateSet = true;
+					}
+					if (transitionTime > 0)
+						target = (i << 3) | (transitionTime << 8);
+				}
+				table[i - 1] = target;
+			}
+			TRACE_ALWAYS("\tautonomous power state transition table:\n");
+			for (int i = 0; i < 8; i++) {
+				// skip the rest if the four values are zero
+				if (table[i * 4] == 0 && table[i * 4 + 1] == 0 && table[i * 4 + 2] == 0
+					&& table[i * 4 + 3] == 0) {
+					break;
+				}
+				TRACE_ALWAYS("\t%" B_PRIx64 " %" B_PRIx64" %" B_PRIx64" %" B_PRIx64 "\n",
+					table[i * 4], table[i * 4 + 1], table[i * 4 + 2], table[i * 4 + 3]);
+			}
+			int err = nvme_ctrlr_set_feature(info->ctrlr, false,
+				NVME_FEAT_AUTONOMOUS_POWER_STATE_TRANSITION,
+				(firstStateSet || secondStateSet) ? 1 : 0, 0, table, tableSize, NULL);
+			if (err != 0)
+				TRACE_ERROR("failed to set apst table!\n");
+			else
+				TRACE_ALWAYS("\t=> feature apst table set\n");
+
+			free(table);
+		}
 	}
 
 	// allocate qpairs
-	uint32 try_qpairs = cstat.io_qpairs;
+	uint32 try_qpairs = cstat->io_qpairs;
 	try_qpairs = min_c(try_qpairs, NVME_MAX_QPAIRS);
 	if (try_qpairs >= (uint32)smp_get_num_cpus()) {
 		try_qpairs = smp_get_num_cpus();
@@ -302,8 +375,8 @@ nvme_disk_init_device(void* _info, void** _cookie)
 		// only on 32-bits, and the rest only need to have sizes that are a multiple
 		// of the block size.
 	restrictions.max_segment_count = (NVME_MAX_SGL_DESCRIPTORS / 2);
-	restrictions.max_transfer_size = cstat.max_xfer_size;
-	info->max_io_blocks = cstat.max_xfer_size / nsstat.sector_size;
+	restrictions.max_transfer_size = cstat->max_xfer_size;
+	info->max_io_blocks = cstat->max_xfer_size / nsstat.sector_size;
 
 	err = info->dma_resource.Init(restrictions, B_PAGE_SIZE, buffers, buffers);
 	if (err != 0) {
@@ -496,7 +569,7 @@ ior_next_sge(nvme_io_request* request, uint64_t* address, uint32_t* length)
 	*address = request->iovecs[index].address + request->iovec_offset;
 	*length = request->iovecs[index].size - request->iovec_offset;
 
-	TRACE("IOV %d (+ " B_PRIu32 "): 0x%" B_PRIx64 ", %" B_PRIu32 "\n",
+	TRACE("IOV %d (+ %" B_PRIu32 "): 0x%" B_PRIx64 ", %" B_PRIu32 "\n",
 		request->iovec_i, request->iovec_offset, *address, *length);
 
 	request->iovec_i++;
@@ -723,7 +796,7 @@ nvme_disk_io(void* cookie, io_request* request)
 
 	// See if we need to bounce due to rounding.
 	const off_t rounded_pos = ROUNDDOWN(request->Offset(), block_size);
-	phys_size_t rounded_len = ROUNDUP(request->Length() + (request->Offset()
+	const phys_size_t rounded_len = ROUNDUP(request->Length() + (request->Offset()
 		- rounded_pos), block_size);
 	if (rounded_pos != request->Offset() || rounded_len != request->Length())
 		bounceAll = true;
@@ -732,9 +805,6 @@ nvme_disk_io(void* cookie, io_request* request)
 		// Let the bounced I/O routine take care of everything from here.
 		return nvme_disk_bounced_io(handle, request);
 	}
-
-	nvme_request.lba_start = rounded_pos / block_size;
-	nvme_request.lba_count = rounded_len / block_size;
 
 	// No bouncing was required.
 	ReadLocker readLocker;
@@ -750,6 +820,7 @@ nvme_disk_io(void* cookie, io_request* request)
 
 	const uint32 max_io_blocks = handle->info->max_io_blocks;
 	int32 remaining = nvme_request.iovec_count;
+	nvme_request.lba_start = rounded_pos / block_size;
 	while (remaining > 0) {
 		nvme_request.iovec_count = min_c(remaining,
 			NVME_MAX_SGL_DESCRIPTORS / 2);

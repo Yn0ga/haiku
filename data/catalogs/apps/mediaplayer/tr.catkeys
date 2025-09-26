@@ -1,4 +1,4 @@
-1	turkish	x-vnd.Haiku-MediaPlayer	390961765
+1	turkish	x-vnd.Haiku-MediaPlayer	520971408
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Girdiyi çöpe at
 Close	MediaPlayer-PlaylistWindow		Kapat
 Volume of background clips	MediaPlayer-SettingsWindow		Arka plan kliplerinin ses düzeyi
@@ -24,7 +24,6 @@ Resume:	MediaPlayer-SettingsWindow		Oynatmayı sürdür:
 Duration	MediaPlayer-InfoWin		Uzunluk
 Import Entries	MediaPlayer-ImportPLItemsCmd		Girdileri içe aktar
 Open network stream	MediaPlayer-Main		Ağ akışı aç
-Move file to Trash	MediaPlayer-PlaylistWindow		Dosyayı çöpe at
 Open file…	MediaPlayer-Main		Dosya aç…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Tam ekran kipinde denetimleri ölçekle
 View options	MediaPlayer-SettingsWindow		Görüntüleme seçenekleri
@@ -48,7 +47,7 @@ Bottom of screen	MediaPlayer-SettingsWindow		Ekranın alt kısmı
 MediaPlayer settings	MediaPlayer-SettingsWindow		Ortam Oynatıcısı ayarları
 Copyright	MediaPlayer-InfoWin		Telif hakkı
 Invalid URL inserted!	MediaPlayer-NetworkStream		Geçersiz URL girildi!
-Aspect ratio	MediaPlayer-Main		En boy oranı
+Aspect ratio	MediaPlayer-Main		En–boy oranı
 Eject device	MediaPlayer-Main		Aygıtı çıkar
 Saving the playlist failed.\n\nError: 	MediaPlayer-PlaylistWindow		Oynatma listesi kaydedilemedi.\n\nHata: 
 <no media>	MediaPlayer-InfoWin		<ortam yok>
@@ -58,6 +57,7 @@ Video track	MediaPlayer-Main		Video parçası
 Playlist…	MediaPlayer-Main		Oynatma listesi…
 <unnamed media>	MediaPlayer-InfoWin		<adsız ortam>
 Save	MediaPlayer-PlaylistWindow		Kaydet
+25% scale	MediaPlayer-Main		%25 ölçek
 Randomize Entries	MediaPlayer-RandomizePLItemsCmd		Girdileri rastgele dağıt
 Cancel	MediaPlayer-NetworkStream		Vazgeç
 Nothing to Play	MediaPlayer-Main		Oynatacak bir şey yok

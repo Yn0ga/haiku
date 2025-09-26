@@ -35,7 +35,6 @@
 
 #if FS_SHELL
 	using namespace FSShell;
-#	define user_strlcpy(to, from, len)	(strlcpy(to, from, len), FSSH_B_OK)
 #endif
 
 
@@ -632,7 +631,7 @@ rootfs_free_cookie(fs_volume* _volume, fs_vnode* _v, void* _cookie)
 
 
 static status_t
-rootfs_fsync(fs_volume* _volume, fs_vnode* _v)
+rootfs_fsync(fs_volume* _volume, fs_vnode* _v, bool dataOnly)
 {
 	return B_OK;
 }

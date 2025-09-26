@@ -70,8 +70,9 @@ public:
 
 	void SaveDesktopPoseLocations();
 
+	virtual bool ShouldHaveDraggableFolderIcon() { return false; };
+
 protected:
-	virtual void AddWindowContextMenus(BMenu*);
 	virtual BPoseView* NewPoseView(Model*, uint32);
 
 	virtual void WorkspaceActivated(int32, bool);

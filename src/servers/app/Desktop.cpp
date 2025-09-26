@@ -38,6 +38,7 @@
 
 #include <PrivateScreen.h>
 #include <ServerProtocol.h>
+#include <ServerReadOnlyMemory.h>
 #include <ViewPrivate.h>
 #include <WindowInfo.h>
 
@@ -494,7 +495,7 @@ Desktop::Init()
 	// desktop settings, since it is used there already
 	InitializeColorMap();
 
-	const size_t areaSize = B_PAGE_SIZE;
+	const size_t areaSize = sizeof(server_read_only_memory);
 	char name[B_OS_NAME_LENGTH];
 	snprintf(name, sizeof(name), "d:%d:shared read only", fUserID);
 	fSharedReadOnlyArea = create_area(name, (void **)&fServerReadOnlyMemory,
@@ -545,6 +546,19 @@ Desktop::Init()
 		const_cast<ServerFont&>(fSettings->DefaultFixedFont()).SetSize(fontSize);
 		const_cast<menu_info&>(fSettings->MenuInfo()).font_size = fontSize;
 	}
+
+#if 1
+	// Migrate old default UI control color to the new one.
+	// TODO: Drop this after R1/beta6 is released!
+	if (fSettings->UIColor(B_CONTROL_BACKGROUND_COLOR) == make_color(245, 245, 245)
+			&& fSettings->ControlLook().IsEmpty()) {
+		rgb_color newControlBackground = make_color(222, 222, 222);
+		fSettings->SetUIColor(B_CONTROL_BACKGROUND_COLOR, newControlBackground);
+		fSettings->SetUIColor(B_SCROLL_BAR_THUMB_COLOR, newControlBackground);
+	}
+#endif
+
+	fCursorManager.InitializeCursors(fSettings->DefaultBoldFont().Size() / 12.0f);
 
 	HWInterface()->SetDPMSMode(B_DPMS_ON);
 
@@ -1472,7 +1486,7 @@ Desktop::MoveWindowBy(Window* window, float x, float y, int32 workspace)
 					}
 
 					stackWindow->Anchor(workspace).position += BPoint(x, y);
-					stackWindow->SetCurrentWorkspace(workspace);
+					stackWindow->SetPriorWorkspace(workspace);
 					_WindowChanged(stackWindow);
 				}
 			}
@@ -1762,6 +1776,8 @@ Desktop::FontsChanged(Window* window)
 	window->FontsChanged(&dirty);
 
 	RebuildAndRedrawAfterWindowChange(window, dirty);
+
+	fCursorManager.InitializeCursors(fSettings->DefaultBoldFont().Size() / 12.0f);
 }
 
 

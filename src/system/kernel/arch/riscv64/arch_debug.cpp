@@ -143,15 +143,9 @@ lookup_symbol(Thread* thread, addr_t address, addr_t* _baseAddress,
 		status = elf_debug_lookup_symbol_address(address, _baseAddress,
 			_symbolName, _imageName, _exactMatch);
 	} else if (thread != NULL && thread->team != NULL) {
-		// try a lookup using the userland runtime loader structures
+		// try to locate the image in the images loaded into user space
 		status = elf_debug_lookup_user_symbol_address(thread->team, address,
 			_baseAddress, _symbolName, _imageName, _exactMatch);
-
-		if (status != B_OK) {
-			// try to locate the image in the images loaded into user space
-			status = image_debug_lookup_user_symbol_address(thread->team,
-				address, _baseAddress, _symbolName, _imageName, _exactMatch);
-		}
 	}
 
 	return status;
@@ -1142,11 +1136,16 @@ arch_debug_gdb_get_registers(char* buffer, size_t bufferSize)
 }
 
 
+void
+arch_debug_snooze(bigtime_t duration)
+{
+	spin(duration);
+}
+
+
 status_t
 arch_debug_init(kernel_args* args)
 {
-	// at this stage, the debugger command system is alive
-
 	add_debugger_command("where", &stack_trace, "Same as \"sc\"");
 	add_debugger_command("bt", &stack_trace, "Same as \"sc\" (as in gdb)");
 	add_debugger_command("sc", &stack_trace,

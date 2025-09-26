@@ -19,6 +19,7 @@
 #include "IdMap.h"
 #include "Request.h"
 #include "RootInode.h"
+#include "WorkQueue.h"
 
 
 Inode::Inode()
@@ -32,13 +33,15 @@ Inode::Inode()
 	fOpenState(NULL),
 	fWriteDirty(false),
 	fAIOWait(create_sem(1, NULL)),
-	fAIOCount(0)
+	fAIOCount(0),
+	fOpenStateReleasesPending(0),
+	fStale(false)
 {
-	rw_lock_init(&fDelegationLock, NULL);
-	mutex_init(&fStateLock, NULL);
-	mutex_init(&fFileCacheLock, NULL);
-	rw_lock_init(&fWriteLock, NULL);
-	mutex_init(&fAIOLock, NULL);
+	rw_lock_init(&fDelegationLock, "nfs4 Inode::fDelegationLock");
+	mutex_init(&fStateLock, "nfs4 Inode::fStateLock");
+	mutex_init(&fFileCacheLock, "nfs4 Inode::fFileCacheLock");
+	rw_lock_init(&fWriteLock, "nfs4 Inode::fWriteLock");
+	mutex_init(&fAIOLock, "nfs4 Inode::fAIOLock");
 }
 
 
@@ -64,7 +67,7 @@ Inode::CreateInode(FileSystem* fs, const FileInfo& fi, Inode** _inode)
 	uint64 size;
 	do {
 		RPC::Server* serv = fs->Server();
-		Request request(serv, fs);
+		Request request(serv, fs, geteuid(), getegid());
 		RequestBuilder& req = request.Builder();
 
 		req.PutFH(inode->fInfo.fHandle);
@@ -172,16 +175,21 @@ Inode::RevalidateFileCache()
 		return B_OK;
 	SyncAndCommit(true);
 
-	file_cache_delete(fFileCache);
+	result = file_cache_disable(fFileCache);
+	if (result != B_OK) {
+		INFORM("RevalidateFileCache: failed to disable cache\n");
+		return result;
+	}
 
 	struct stat st;
 	fMetaCache.InvalidateStat();
 	result = Stat(&st);
 	if (result == B_OK)
 		fMaxFileSize = st.st_size;
-	fFileCache = file_cache_create(fFileSystem->DevId(), ID(), fMaxFileSize);
+	file_cache_set_size(fFileCache, fMaxFileSize);
+	file_cache_enable(fFileCache);
 
-	change = fChange;
+	fChange = change;
 	return B_OK;
 }
 
@@ -195,10 +203,39 @@ Inode::LookUp(const char* name, ino_t* id)
 	if (fType != NF4DIR)
 		return B_NOT_A_DIRECTORY;
 
+	// attempt to get the id from the DirectoryCache
+	fCache->Lock();
+	status_t result = fCache->Revalidate();
+		// At times, this will do a full readdir, in order to sync the DirectoryCache
+		// with server changes.  However, if the directory contents have not changed since
+		// the last readdir, it will either perform no RPC, or an RPC that just checks
+		// FATTR4_CHANGE.
+	if (result == B_OK) {
+		SinglyLinkedList<NameCacheEntry>& entriesList = fCache->EntriesList();
+		NameCacheEntry* entry = entriesList.Head();
+		while (entry != NULL) {
+			if (strcmp(name, entry->fName) == 0)
+				break;
+			entry = entriesList.GetNext(entry);
+		}
+		if (entry != NULL) {
+			// Verify that the InoIdMap already has an entry for this inode.
+			// If not, we need to get the file handle from the server and call ChildAdded().
+			FileInfo info;
+			result = fFileSystem->InoIdMap()->GetFileInfo(&info, entry->fNode);
+			if (result == B_OK) {
+				*id = entry->fNode;
+				fCache->Unlock();
+				return B_OK;
+			}
+		}
+	}
+	fCache->Unlock();
+
 	uint64 change;
 	uint64 fileID;
 	FileHandle handle;
-	status_t result = NFS4Inode::LookUp(name, &change, &fileID, &handle);
+	result = NFS4Inode::LookUp(name, &change, &fileID, &handle);
 	if (result != B_OK)
 		return result;
 
@@ -235,6 +272,7 @@ Inode::Link(Inode* dir, const char* name)
 
 	fFileSystem->Root()->MakeInfoInvalid();
 	fInfo.fNames->AddName(dir->fInfo.fNames, name);
+	fMetaCache.InvalidateStat();
 
 	dir->fCache->Lock();
 	if (dir->fCache->Valid()) {
@@ -272,6 +310,7 @@ Inode::Remove(const char* name, FileType type, ino_t* id)
 
 	ChangeInfo changeInfo;
 	uint64 fileID;
+
 	status_t result = NFS4Inode::RemoveObject(name, type, &changeInfo, &fileID);
 	if (result != B_OK)
 		return result;
@@ -354,7 +393,24 @@ Inode::Rename(Inode* from, Inode* to, const char* fromName, const char* toName,
 	if (oldID != NULL)
 		*oldID = FileIdToInoT(oldFileID);
 
-	DirectoryCache* cache = attribute ? from->fAttrCache : from->fCache;
+	DirectoryCache* cache = NULL;
+	if (*oldID != 0) {
+		// If we overwrote an existing file, remove the DirectoryCache entry of
+		// the overwritten file, which now contains an incorrect inode value.
+		cache = attribute ? to->fAttrCache : to->fCache;
+		cache->Lock();
+		if (cache->Valid()) {
+			if (toChange.fAtomic
+				&& (cache->ChangeInfo() == toChange.fBefore)) {
+				cache->RemoveEntry(toName);
+			} else {
+				cache->Trash();
+			}
+		}
+		cache->Unlock();
+	}
+
+	cache = attribute ? from->fAttrCache : from->fCache;
 	cache->Lock();
 	if (cache->Valid()) {
 		if (fromChange.fAtomic && cache->ChangeInfo() == fromChange.fBefore) {
@@ -418,6 +474,8 @@ Inode::CreateObject(const char* name, const char* path, int mode, FileType type,
 	if (result != B_OK)
 		return result;
 
+	fFileSystem->EnsureNoCollision(FileIdToInoT(fileID), handle);
+
 	fFileSystem->Root()->MakeInfoInvalid();
 
 	result = ChildAdded(name, fileID, handle);
@@ -477,7 +535,7 @@ Inode::Access(int mode)
 
 
 status_t
-Inode::Stat(struct stat* st, OpenAttrCookie* attr)
+Inode::Stat(struct stat* st, OpenAttrCookie* attr, bool revalidate)
 {
 	ASSERT(st != NULL);
 
@@ -485,7 +543,7 @@ Inode::Stat(struct stat* st, OpenAttrCookie* attr)
 		return GetStat(st, attr);
 
 	bool cache = fFileSystem->GetConfiguration().fCacheMetadata;
-	if (!cache)
+	if (!cache || revalidate)
 		return GetStat(st, NULL);
 
 	status_t result = fMetaCache.GetStat(st);
@@ -647,12 +705,15 @@ Inode::WriteStat(const struct stat* st, uint32 mask, OpenAttrCookie* cookie)
 		i++;
 	}
 
+	ReadLocker delegationLocker(fDelegationLock);
 	if (cookie == NULL) {
 		MutexLocker stateLocker(fStateLock);
 		ASSERT(fOpenState != NULL || !(mask & B_STAT_SIZE));
-		result = NFS4Inode::WriteStat(fOpenState, attr, i);
-	} else
-		result = NFS4Inode::WriteStat(cookie->fOpenState, attr, i);
+		result = NFS4Inode::WriteStat(fOpenState, fDelegation, attr, i);
+	} else {
+		ASSERT(cookie->fOpenState->fDelegation == fDelegation);
+		result = NFS4Inode::WriteStat(cookie->fOpenState, NULL, attr, i);
+	}
 
 	fMetaCache.InvalidateStat();
 
@@ -917,6 +978,52 @@ Inode::RecallDelegation(bool truncate)
 }
 
 
+/*! Flush write data to the server if needed before returning the delegation.
+	@post If data needs to be flushed, an IO job is enqueued but may not be complete.
+*/
+void
+Inode::PrepareDelegationRecall(bool truncate)
+{
+	rw_lock_write_lock(&fDelegationLock);
+	fDelegation->MarkRecalled();
+	rw_lock_write_unlock(&fDelegationLock);
+
+	ReadLocker _(fDelegationLock);
+	if (fDelegation == NULL)
+		return;
+
+	fDelegation->PrepareGiveUp(truncate);
+
+	return;
+}
+
+
+/*! Return the delegation after data has been flushed to the server.
+	@pre RecallDelegationAsyncPrep has been called.
+*/
+void
+Inode::RecallDelegationAsync(bool truncate)
+{
+	WriteLocker _(fDelegationLock);
+	if (fDelegation == NULL)
+		return;
+
+	fDelegation->DoGiveUp(truncate, false);
+
+	fMetaCache.UnlockValid();
+	fFileSystem->RemoveDelegation(fDelegation);
+
+	MutexLocker stateLocker(fStateLock);
+	fOpenState->fDelegation = NULL;
+	ReleaseOpenState();
+
+	delete fDelegation;
+	fDelegation = NULL;
+
+	return;
+}
+
+
 void
 Inode::RecallReadDelegation()
 {
@@ -946,27 +1053,90 @@ Inode::ReturnDelegation(bool truncate)
 }
 
 
+/*! Temporarily unlock the locks that need to be acquired by the WorkQueue when a delegation
+	is recalled.
+	@pre fStateLock is locked and fDelegation lock is read-locked.
+*/
+void
+Inode::UnlockAndRelockStateLocks()
+{
+	rw_lock_read_unlock(&fDelegationLock);
+	mutex_unlock(&fStateLock);
+	rw_lock_read_lock(&fDelegationLock);
+	mutex_lock(&fStateLock);
+}
+
+
+/*! Temporarily unlock fWriteLock.  Useful for allowing an IO job to complete.
+	@pre fWriteLock is write-locked and fDelegationLock is read-locked.
+*/
+void
+Inode::UnlockAndRelockWriteLock()
+{
+	rw_lock_write_unlock(&fWriteLock);
+	rw_lock_write_lock(&fWriteLock);
+}
+
+
+/*! Release a reference to fOpenState or set up later release if IO is not complete.
+	@pre fStateLock is locked.
+*/
 void
 Inode::ReleaseOpenState()
 {
 	ASSERT(fOpenState != NULL);
 
-	if (fOpenState->ReleaseReference() == 1) {
-		ASSERT(fAIOCount == 0);
-		fOpenState = NULL;
+	// If IO is pending, wait until it is finished to release the (possibly last) reference.
+	// It would be simpler to call WaitAIOComplete here, but that won't work if this
+	// is the WorkQueue thread.
+	MutexLocker _(fAIOLock);
+	if (fAIOCount > 0) {
+		++fOpenStateReleasesPending;
+	} else {
+		if (fOpenState->ReleaseReference() == 1)
+			fOpenState = NULL;
 	}
+
+	return;
+}
+
+
+/*! Sync file cache data to server.
+	@param wait If true, the function returns only after the sync is finished.
+*/
+status_t
+Inode::Sync(bool force, bool wait)
+{
+	ReadLocker locker(fDelegationLock);
+	if (!force && fDelegation != NULL && fDelegation->Type() == OPEN_DELEGATE_WRITE
+		&& !fDelegation->RecallInitiated()) {
+		locker.Unlock();
+		if (wait == true) {
+			// Wait for any IO jobs that may already be enqueued.
+			WaitAIOComplete();
+		}
+		return B_OK;
+	}
+	locker.Unlock();
+
+	status_t status = file_cache_sync(fFileCache);
+	if (wait == true)
+		WaitAIOComplete();
+
+	return status;
 }
 
 
 status_t
-Inode::SyncAndCommit(bool force)
+Inode::SyncAndCommit(bool force, OpenStateCookie* cookie)
 {
-	if (!force && fDelegation != NULL)
-		return B_OK;
+	Sync(force, true);
 
-	file_cache_sync(fFileCache);
-	WaitAIOComplete();
-	return Commit();
+	// The server is liable to deny a commit request that does not come from a user who
+	// opened the file.
+	uid_t uid = cookie != NULL ? cookie->fUid : geteuid();
+	gid_t gid = cookie != NULL ? cookie->fGid : getegid();
+	return Commit(uid, gid);
 }
 
 
@@ -983,10 +1153,115 @@ Inode::BeginAIOOp()
 void
 Inode::EndAIOOp()
 {
-	MutexLocker _(fAIOLock);
+	MutexLocker AIOLocker(fAIOLock);
 	ASSERT(fAIOCount > 0);
 	fAIOCount--;
 	if (fAIOCount == 0)
 		release_sem(fAIOWait);
+
+	if (fOpenStateReleasesPending > 0) {
+		MutexLocker stateLocker(fStateLock);
+		--fOpenStateReleasesPending;
+		if (fOpenState->ReleaseReference() == 1) {
+			ASSERT(fAIOCount == 0);
+			ASSERT(fOpenStateReleasesPending == 0);
+			fOpenState = NULL;
+		}
+	}
+}
+
+
+bool
+Inode::AIOIncomplete()
+{
+	MutexLocker _(fAIOLock);
+
+	if (fAIOCount > 0)
+		return true;
+
+	return false;
+}
+
+
+/*! Print the ID, handle, names, and DirectoryCache if applicable.
+	@pre The parent VnodeToInode is locked.
+*/
+void
+Inode::Dump(void (*xprintf)(const char*, ...))
+{
+	bool dumpDelegation = true;
+	bool dumpAIO = true;
+	if (xprintf != kprintf) {
+		status_t status = rw_lock_read_lock_with_timeout(&fDelegationLock, B_RELATIVE_TIMEOUT, 0);
+		if (status != B_OK)
+			dumpDelegation = false;
+		status = mutex_trylock(&fAIOLock);
+		if (status != B_OK)
+			dumpAIO = false;
+	}
+
+	_DumpLocked(xprintf, dumpDelegation, dumpAIO);
+
+	if (xprintf != kprintf) {
+		if (dumpDelegation)
+			rw_lock_read_unlock(&fDelegationLock);
+		if (dumpAIO)
+			mutex_unlock(&fAIOLock);
+	}
+
+	if (GetFileSystem()->Root() != this)
+		fInfo.fNames->Dump(xprintf);
+
+	if (fCache != NULL)
+		fCache->Dump(xprintf);
+
+	fMetaCache.Dump(xprintf);
+
+	if (fOpenState == NULL) {
+		xprintf("No OpenState\n");
+	} else {
+		status_t status = mutex_trylock(&fStateLock);
+		if (status == B_OK) {
+			fOpenState->Dump(xprintf);
+			mutex_unlock(&fStateLock);
+		} else {
+			xprintf("fStateLock locked\n");
+		}
+	}
+
+	gWorkQueue->Dump(xprintf);
+
+	return;
+}
+
+/*!	Dump members that have const Dump methods or are dumped manually.
+
+*/
+void
+Inode::_DumpLocked(void (*xprintf)(const char*, ...), bool dumpDelegation, bool dumpAIO) const
+{
+	if (GetFileSystem()->Root() == this)
+		xprintf("Root inode\t%" B_PRIu64 " at %p\n", fInfo.fFileId, this);
+	else
+		xprintf("Inode\t%" B_PRIu64 " at %p\n", fInfo.fFileId, this);
+
+	xprintf("FileHandle ");
+	fInfo.fHandle.Dump(xprintf);
+
+	xprintf("\tfType %" B_PRIu32 ", fChange %" B_PRIu64 ", fStale %d\n", fType, fChange, fStale);
+
+	if (dumpAIO)
+		xprintf("\tfAIOCount %" B_PRIu32 "\n", fAIOCount);
+	else
+		xprintf("\tAIO locked\n");
+
+	if (fDelegation == NULL)
+		xprintf("\tNo Delegation\n");
+	else if (dumpDelegation)
+		fDelegation->Dump();
+	else
+		xprintf("Delegation locked\n");
+
+	return;
 }
 

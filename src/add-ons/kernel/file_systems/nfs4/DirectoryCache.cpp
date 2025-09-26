@@ -86,7 +86,7 @@ DirectoryCache::DirectoryCache(Inode* inode, bool attr)
 {
 	ASSERT(inode != NULL);
 
-	mutex_init(&fLock, NULL);
+	mutex_init(&fLock, "nfs4 DirectoryCache");
 }
 
 
@@ -110,8 +110,6 @@ DirectoryCache::Trash()
 {
 	while (!fNameCache.IsEmpty()) {
 		NameCacheEntry* current = fNameCache.RemoveHead();
-		entry_cache_remove(fInode->GetFileSystem()->DevId(), fInode->ID(),
-			current->fName);
 		delete current;
 	}
 
@@ -147,11 +145,6 @@ DirectoryCache::AddEntry(const char* name, ino_t node, bool created)
 		}
 
 		fDirectoryCache->fEntries.Add(entry);
-	}
-
-	if (!fAttrDir) {
-		return entry_cache_add(fInode->GetFileSystem()->DevId(), fInode->ID(),
-			name, node);
 	}
 
 	return B_OK;
@@ -194,11 +187,6 @@ DirectoryCache::RemoveEntry(const char* name)
 			current = iterator.Next();
 		}
 	}
-
-	if (!fAttrDir) {
-		entry_cache_remove(fInode->GetFileSystem()->DevId(), fInode->ID(),
-			name);
-	}
 }
 
 
@@ -218,9 +206,6 @@ DirectoryCache::_LoadSnapshot(bool trash)
 	if (oldSnapshot != NULL)
 		oldSnapshot->AcquireReference();
 
-	if (trash)
-		Trash();
-
 	DirectoryCacheSnapshot* newSnapshot;
 	status_t result = fInode->GetDirSnapshot(&newSnapshot, NULL, &fChange,
 		fAttrDir);
@@ -233,6 +218,32 @@ DirectoryCache::_LoadSnapshot(bool trash)
 
 	_SetSnapshot(newSnapshot);
 	fExpireTime = system_time() + fExpirationTime;
+
+	if (trash) {
+		// Clear fNameCache, while checking for mismatches between its entries and the newly
+		// obtained snapshot that might indicate stale nodes.
+		while (!fNameCache.IsEmpty()) {
+			NameCacheEntry* current = fNameCache.RemoveHead();
+			if (strcmp(current->fName, "..") != 0) {
+				bool nodeFound = false;
+				for (SinglyLinkedList<NameCacheEntry>::ConstIterator it
+						= newSnapshot->fEntries.GetIterator();
+					NameCacheEntry* snapshotEntry = it.Next();) {
+					if (current->fNode == snapshotEntry->fNode
+						&& strcmp(current->fName, snapshotEntry->fName) == 0) {
+						nodeFound = true;
+						break;
+					}
+				}
+				if (!nodeFound) {
+					// The inode-name association that was cached in 'current' is no longer valid.
+					fInode->GetFileSystem()->ServerUnlinkCleanup(current->fNode, fInode,
+						current->fName);
+				}
+			}
+			delete current;
+		}
+	}
 
 	fTrashed = false;
 
@@ -265,6 +276,35 @@ DirectoryCache::Revalidate()
 	}
 
 	return _LoadSnapshot(true);
+}
+
+
+void
+DirectoryCache::Dump(void (*xprintf)(const char*, ...))
+{
+	MutexLocker locker;
+	if (xprintf != kprintf)
+		locker.SetTo(fLock, false);
+
+	_DumpLocked(xprintf);
+
+	return;
+}
+
+
+void
+DirectoryCache::_DumpLocked(void (*xprintf)(const char*, ...)) const
+{
+	xprintf("DirectoryCache::fNameCache:\n");
+
+	for (SinglyLinkedList<NameCacheEntry>::ConstIterator it = fNameCache.GetIterator();
+		const NameCacheEntry* entry = it.Next();) {
+		xprintf("\tino: %" B_PRIdINO "\t", entry->fNode);
+		if (entry->fName != NULL)
+			xprintf("name: %s\n", entry->fName);
+	}
+
+	return;
 }
 
 

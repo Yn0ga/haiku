@@ -1,4 +1,4 @@
-1	english	x-vnd.Haiku-StyledEdit	3760185556
+1	english	x-vnd.Haiku-StyledEdit	1077895429
 Document statistics	Statistics		文档统计
 Cannot revert, file not found: \"%s\".	RevertToSavedAlert		无法恢复，文件未找到：\"%s\"。
 Cut	Menus		剪切
@@ -11,7 +11,7 @@ OK	Statistics		确定
 Find	FindandReplaceWindow		查找
 New	Menus		新建
 Document	Menus		文档
-Search backwards	FindandReplaceWindow		后台搜索
+Search backwards	FindandReplaceWindow		反向搜索
 Find again	Menus		再次查找
 Read-only	StatusView		只读
 Save	Menus		保存
@@ -34,6 +34,7 @@ Bold	Menus		粗体
 File \"%file%\" was modified by another application, reload it?	NodeMonitorAlerts		文件 \"%file%\" 已由其他程序修改，是否重新载入？
 File \"%file%\" was removed by another application, recover it?	NodeMonitorAlerts		\"%file%\" 文件已被其他应用删除，是否恢复该文件？
 Lines:	Statistics		行数：
+Strikeout	Menus		删除线
 Replace in all windows	FindandReplaceWindow		在所有窗口进行替换
 \"%s\" has unsaved changes.\nRevert it to the last saved version? 	RevertToSavedAlert		\"%s\" 有未保存的更改。\n恢复到最近保存版本？
 Save	SaveAlert		保存
@@ -49,12 +50,12 @@ Left	Menus		居左
 Default	Menus		默认
 OK	SaveAlert		确定
 Color	Menus		颜色
-Save changes to the document \"%s\"? 	QuitAlert		将所做更改存入文档\"%s\"中吗?
+Save changes to the document \"%s\"? 	QuitAlert		将所做更改存入文档\"%s\"中吗? 
 StyledEdit	System name		StyledEdit
 Underline	Menus		下划线
 Find:	FindandReplaceWindow		查找：
 Undo typing	QuitAlert		取消输入
-Error loading \"%s\":\n\t%s	LoadAlert		加载错误 \"%s\"\n\t%s
+Error loading \"%s\":\n\t%s	LoadAlert		加载 \"%s\"出错。\n\t%s
 Don't save	SaveAlert		不保存
 Reload…	Menus		重新载入…
 Print…	Menus		打印…
@@ -71,7 +72,7 @@ Case-sensitive	FindandReplaceWindow		区分大小写
 Find selection	Menus		搜索选中
 Find…	Menus		查找…
 Cancel	SaveAlert		取消
-Revert	RevertToSavedAlert		取消
+Revert	RevertToSavedAlert		恢复
 Size	Menus		大小
 Decrease size	Menus		缩减大小
 Autodetect	Menus		自动删除
@@ -85,7 +86,7 @@ Replace	FindandReplaceWindow		替换
 Characters:	Statistics		字符数：
 Don't save	QuitAlert		不保存
 This file is marked read-only. Save changes to the document \"%s\"? 	SaveAlert		文件标记为只读。是否将修改保存到文档 \"%s\" ?
-Font	Menus		字体
 Align	Menus		对齐
+Font	Menus		字体
 Select all	Menus		全选
 Right	Menus		居右

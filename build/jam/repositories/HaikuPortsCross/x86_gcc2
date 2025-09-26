@@ -33,7 +33,7 @@ BootstrapPackageRepository HaikuPortsCross
 	icu_bootstrap-57.1-2
 	icu_bootstrap_devel-57.1-2
 	less_bootstrap-451-1
-	m4_bootstrap-1.4.16-1
+	m4_bootstrap-1.4.19-1
 	make_bootstrap-4.1-2
 	ncurses6_bootstrap-6.0-1
 	ncurses6_bootstrap_devel-6.0-1
@@ -58,13 +58,6 @@ BootstrapPackageRepository HaikuPortsCross
 	}@ # secondary_x86
 	:
 	# repository architecture packages (stage 2)
-	libsolv_bootstrap-0.3.0_haiku_2014_12_22-1
-	libsolv_bootstrap_devel-0.3.0_haiku_2014_12_22-1
-
-	secondary_x86 @{
-		libsolv_bootstrap_x86-0.3.0_haiku_2014_12_22-1
-		libsolv_bootstrap_x86_devel-0.3.0_haiku_2014_12_22-1
-	}@ # secondary_x86
 	:
 	# source packages
 	bash_bootstrap
@@ -80,7 +73,6 @@ BootstrapPackageRepository HaikuPortsCross
 	gcc_bootstrap
 	grep_bootstrap
 	less_bootstrap
-	libsolv_bootstrap
 	m4_bootstrap
 	make_bootstrap
 	ncurses6_bootstrap

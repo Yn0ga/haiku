@@ -735,9 +735,9 @@ SysInfoView::CacheInitialSize()
 	// increase min width based on some potentially wide string views
 	fCachedMinWidth = ceilf(std::max(fCachedBaseWidth,
 		fVersionLabelView->StringWidth(fVersionLabelView->Text()) + insets));
-	fCachedMinWidth = ceilf(std::max(fCachedBaseWidth,
+	fCachedMinWidth = ceilf(std::max(fCachedMinWidth,
 		fCPUInfoView->StringWidth(fCPUInfoView->Text()) + insets));
-	fCachedMinWidth = ceilf(std::max(fCachedBaseWidth,
+	fCachedMinWidth = ceilf(std::max(fCachedMinWidth,
 		fMemSizeView->StringWidth(fMemSizeView->Text()) + insets));
 
 	// width is fixed, height can grow in Pulse()
@@ -1806,6 +1806,19 @@ AboutView::_CreateCreditsView()
 		StringVector(),
 		"https://www.freebsd.org");
 
+	// NetBSD copyrights
+	AddCopyrightEntry("The NetBSD Project",
+		B_TRANSLATE("Contains software developed by the NetBSD "
+		"Foundation, Inc. and its contributors:\n"
+		"netresolv\n"
+		COPYRIGHT_STRING "1998-2023 The NetBSD Project, "
+		COPYRIGHT_STRING "2004-2009 by Internet Systems Consortium, Inc. (\"ISC\"), "
+		COPYRIGHT_STRING "1996-2003 by Internet Software Consortium. "
+		"All rights reserved."),
+		StringVector("ISC", kBSDTwoClause, kBSDThreeClause, NULL),
+		StringVector(),
+		"https://www.netbsd.org");
+
 	// FFmpeg copyrights
 	_AddPackageCredit(PackageCredit("FFmpeg")
 		.SetCopyright(B_TRANSLATE(COPYRIGHT_STRING "2000-2019 Fabrice "
@@ -1836,12 +1849,6 @@ AboutView::_CreateCreditsView()
 			"Mesa3D Project. All rights reserved."))
 		.SetLicense("MIT")
 		.SetURL("https://www.mesa3d.org"));
-
-	// SGI's GLU implementation copyrights
-	_AddPackageCredit(PackageCredit("GLU")
-		.SetCopyright(B_TRANSLATE(COPYRIGHT_STRING "1991-2000 "
-			"Silicon Graphics, Inc. All rights reserved."))
-		.SetLicense("SGI Free B"));
 
 	// GLUT implementation copyrights
 	_AddPackageCredit(PackageCredit("GLUT")

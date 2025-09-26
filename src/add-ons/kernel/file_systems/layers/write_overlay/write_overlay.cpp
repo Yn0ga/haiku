@@ -1770,7 +1770,7 @@ overlay_deselect(fs_volume *volume, fs_vnode *vnode, void *cookie, uint8 event,
 
 
 static status_t
-overlay_fsync(fs_volume *volume, fs_vnode *vnode)
+overlay_fsync(fs_volume *volume, fs_vnode *vnode, bool dataOnly)
 {
 	return B_OK;
 }
@@ -2557,6 +2557,9 @@ static status_t
 overlay_mount(fs_volume *volume, const char *device, uint32 flags,
 	const char *args, ino_t *rootID)
 {
+	if (volume->super_volume == NULL)
+		return B_UNSUPPORTED;
+
 	TRACE_VOLUME("mounting write overlay\n");
 	volume->private_volume = new(std::nothrow) OverlayVolume(volume);
 	if (volume->private_volume == NULL)

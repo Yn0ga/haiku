@@ -34,7 +34,7 @@
 #include <find_directory_private.h>
 #include <fs/KPath.h>
 #include <heap.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <kimage.h>
 #include <kscheduler.h>
@@ -132,7 +132,7 @@ struct ProcessGroupHashDefinition {
 
 	ProcessGroup*& GetLink(ProcessGroup* value) const
 	{
-		return value->next;
+		return value->hash_next;
 	}
 };
 
@@ -431,7 +431,7 @@ Team::Team(team_id id, bool kernel)
 	this->id = id;
 	visible = true;
 
-	hash_next = siblings_next = parent = children = group_next = NULL;
+	hash_next = parent = NULL;
 	serial_number = -1;
 
 	group_id = session_id = -1;
@@ -445,7 +445,6 @@ Team::Team(team_id id, bool kernel)
 	realtime_sem_context = NULL;
 	xsi_sem_context = NULL;
 	death_entry = NULL;
-	list_init(&dead_threads);
 
 	dead_children.condition_variable.Init(&dead_children, "team children");
 	dead_children.count = 0;
@@ -461,10 +460,8 @@ Team::Team(team_id id, bool kernel)
 
 	address_space = NULL;
 	main_thread = NULL;
-	thread_list = NULL;
 	loading_info = NULL;
 
-	list_init(&image_list);
 	list_init(&watcher_list);
 	list_init(&sem_list);
 	list_init_etc(&port_list, port_team_link_offset());
@@ -530,10 +527,8 @@ Team::~Team()
 	if (fQueuedSignalsCounter != NULL)
 		fQueuedSignalsCounter->ReleaseReference();
 
-	while (thread_death_entry* threadDeathEntry
-			= (thread_death_entry*)list_remove_head_item(&dead_threads)) {
+	while (thread_death_entry* threadDeathEntry = dead_threads.RemoveHead())
 		free(threadDeathEntry);
-	}
 
 	while (::job_control_entry* entry = dead_children.entries.RemoveHead())
 		delete entry;
@@ -649,10 +644,10 @@ Team::LockTeamAndParent(bool dontLockParentIfKernel)
 
 	while (true) {
 		// If the team doesn't have a parent, we're done. Otherwise try to lock
-		// the parent.This will succeed in most cases, simplifying things.
+		// the parent. This will succeed in most cases, simplifying things.
 		Team* parent = this->parent;
 		if (parent == NULL || (dontLockParentIfKernel && parent == sKernelTeam)
-			|| parent->TryLock()) {
+				|| parent->TryLock()) {
 			return;
 		}
 
@@ -734,10 +729,7 @@ Team::LockTeamAndProcessGroup()
 		// Try to lock the group. This will succeed in most cases, simplifying
 		// things.
 		ProcessGroup* group = this->group;
-		if (group == NULL)
-			return;
-
-		if (group->TryLock())
+		if (group == NULL || group->TryLock())
 			return;
 
 		// get a temporary reference to the group, unlock this team, lock the
@@ -942,8 +934,8 @@ Team::CPUTime(bool ignoreCurrentRun, Thread* lockedThread) const
 	Thread* currentThread = thread_get_current_thread();
 	bigtime_t now = system_time();
 
-	for (Thread* thread = thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = thread_list.First(); thread != NULL;
+			thread = thread_list.GetNext(thread)) {
 		bool alreadyLocked = thread == lockedThread;
 		SpinLocker threadTimeLocker(thread->time_lock, alreadyLocked);
 		time += thread->kernel_time + thread->user_time;
@@ -974,8 +966,8 @@ Team::UserCPUTime() const
 
 	bigtime_t now = system_time();
 
-	for (Thread* thread = thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = thread_list.First(); thread != NULL;
+			thread = thread_list.GetNext(thread)) {
 		SpinLocker threadTimeLocker(thread->time_lock);
 		time += thread->user_time;
 
@@ -993,7 +985,6 @@ Team::UserCPUTime() const
 ProcessGroup::ProcessGroup(pid_t id)
 	:
 	id(id),
-	teams(NULL),
 	fSession(NULL),
 	fInOrphanedCheckList(false)
 {
@@ -1077,7 +1068,7 @@ ProcessGroup::IsOrphaned() const
 	// group's session." (Open Group Base Specs Issue 7)
 	bool orphaned = true;
 
-	Team* team = teams;
+	Team* team = teams.First();
 	while (orphaned && team != NULL) {
 		team->LockTeamAndParent(false);
 
@@ -1089,7 +1080,7 @@ ProcessGroup::IsOrphaned() const
 
 		team->UnlockTeamAndParent();
 
-		team = team->group_next;
+		team = teams.GetNext(team);
 	}
 
 	return orphaned;
@@ -1155,7 +1146,7 @@ _dump_team_info(Team* team)
 	} else
 		kprintf("\n");
 
-	kprintf("children:         %p\n", team->children);
+	kprintf("children:         %p\n", team->children.First());
 	kprintf("num_threads:      %d\n", team->num_threads);
 	kprintf("state:            %d\n", team->state);
 	kprintf("flags:            0x%" B_PRIx32 "\n", team->flags);
@@ -1166,7 +1157,7 @@ _dump_team_info(Team* team)
 		(void*)team->user_data, team->user_data_area);
 	kprintf("free user thread: %p\n", team->free_user_threads);
 	kprintf("main_thread:      %p\n", team->main_thread);
-	kprintf("thread_list:      %p\n", team->thread_list);
+	kprintf("thread_list:      %p\n", team->thread_list.First());
 	kprintf("group_id:         %" B_PRId32 "\n", team->group_id);
 	kprintf("session_id:       %" B_PRId32 "\n", team->session_id);
 }
@@ -1285,8 +1276,7 @@ insert_team_into_parent(Team* parent, Team* team)
 {
 	ASSERT(parent != NULL);
 
-	team->siblings_next = parent->children;
-	parent->children = team;
+	parent->children.Add(team, false);
 	team->parent = parent;
 }
 
@@ -1301,22 +1291,8 @@ insert_team_into_parent(Team* parent, Team* team)
 static void
 remove_team_from_parent(Team* parent, Team* team)
 {
-	Team* child;
-	Team* last = NULL;
-
-	for (child = parent->children; child != NULL;
-			child = child->siblings_next) {
-		if (child == team) {
-			if (last == NULL)
-				parent->children = child->siblings_next;
-			else
-				last->siblings_next = child->siblings_next;
-
-			team->parent = NULL;
-			break;
-		}
-		last = child;
-	}
+	parent->children.Remove(team);
+	team->parent = NULL;
 }
 
 
@@ -1351,8 +1327,7 @@ insert_team_into_group(ProcessGroup* group, Team* team)
 	team->group_id = group->id;
 	team->session_id = group->Session()->id;
 
-	team->group_next = group->teams;
-	group->teams = team;
+	group->teams.Add(team, false);
 	group->AcquireReference();
 }
 
@@ -1368,28 +1343,14 @@ static void
 remove_team_from_group(Team* team)
 {
 	ProcessGroup* group = team->group;
-	Team* current;
-	Team* last = NULL;
 
 	// the team must be in a process group to let this function have any effect
 	if (group == NULL)
 		return;
 
-	for (current = group->teams; current != NULL;
-			current = current->group_next) {
-		if (current == team) {
-			if (last == NULL)
-				group->teams = current->group_next;
-			else
-				last->group_next = current->group_next;
-
-			break;
-		}
-		last = current;
-	}
+	group->teams.Remove(team);
 
 	team->group = NULL;
-	team->group_next = NULL;
 	team->group_id = -1;
 
 	group->ReleaseReference();
@@ -1791,8 +1752,9 @@ load_image_internal(char**& _flatArgs, size_t flatArgsSize, int32 argCount,
 	inherit_parent_user_and_group(team, parent);
 
 	// get a reference to the parent's I/O context -- we need it to create ours
-	parentIOContext = parent->io_context;
-	vfs_get_io_context(parentIOContext);
+	parentIOContext = (parent->id == B_SYSTEM_TEAM) ? NULL : parent->io_context;
+	if (parentIOContext != NULL)
+		vfs_get_io_context(parentIOContext);
 
 	team->Unlock();
 	parent->UnlockTeamAndProcessGroup();
@@ -1811,18 +1773,18 @@ load_image_internal(char**& _flatArgs, size_t flatArgsSize, int32 argCount,
 	team->SetArgs(path, teamArgs->flat_args + 1, argCount - 1);
 
 	// create a new io_context for this team
+	// remove any fds that have the CLOEXEC flag set (emulating BeOS behaviour)
 	team->io_context = vfs_new_io_context(parentIOContext, true);
-	if (!team->io_context) {
+	if (team->io_context == NULL) {
 		status = B_NO_MEMORY;
 		goto err2;
 	}
 
-	// We don't need the parent's I/O context any longer.
-	vfs_put_io_context(parentIOContext);
-	parentIOContext = NULL;
-
-	// remove any fds that have the CLOEXEC flag set (emulating BeOS behaviour)
-	vfs_exec_io_context(team->io_context);
+	if (parentIOContext != NULL) {
+		// We don't need the parent's I/O context any longer.
+		vfs_put_io_context(parentIOContext);
+		parentIOContext = NULL;
+	}
 
 	// create an address space for this team
 	status = VMAddressSpace::Create(team->id, USER_BASE, USER_SIZE, false,
@@ -1904,11 +1866,10 @@ load_image_internal(char**& _flatArgs, size_t flatArgsSize, int32 argCount,
 		// responsible for unsetting `loading_info` in the team structure.
 		loadingWaitEntry.Wait();
 
-		// We must synchronize with the thread that woke us up, to ensure
-		// there are no remaining consumers of the team_loading_info.
+		// We must synchronize by temporarily reacquiring the Team lock, to
+		// ensure there are no remaining consumers of the team_loading_info.
 		team->Lock();
-		if (team->loading_info != NULL)
-			panic("team loading wait complete, but loading_info != NULL");
+		ASSERT(team->loading_info == NULL);
 		team->Unlock();
 		teamLoadingReference.Unset();
 
@@ -1998,8 +1959,8 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 
 	debugInfoLocker.Unlock();
 
-	for (Thread* thread = team->thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = team->thread_list.First(); thread != NULL;
+			thread = team->thread_list.GetNext(thread)) {
 		if (thread != team->main_thread && thread->id != nubThreadID)
 			return B_NOT_ALLOWED;
 	}
@@ -2331,8 +2292,8 @@ err1:
 static bool
 has_children_in_group(Team* parent, pid_t groupID)
 {
-	for (Team* child = parent->children; child != NULL;
-			child = child->siblings_next) {
+	for (Team* child = parent->children.First(); child != NULL;
+			child = parent->children.GetNext(child)) {
 		TeamLocker childLocker(child);
 		if (child->group_id == groupID)
 			return true;
@@ -2536,7 +2497,7 @@ wait_for_child(pid_t child, uint32 flags, siginfo_t& _info,
 			// to the process group specification at all.
 			bool childrenExist = false;
 			if (child == -1) {
-				childrenExist = team->children != NULL;
+				childrenExist = !team->children.IsEmpty();
 			} else if (child < -1) {
 				childrenExist = has_children_in_group(team, -child);
 			} else if (child != team->id) {
@@ -2736,7 +2697,7 @@ fill_team_info(Team* team, team_info* info, size_t size)
 static bool
 process_group_has_stopped_processes(ProcessGroup* group)
 {
-	Team* team = group->teams;
+	Team* team = group->teams.First();
 	while (team != NULL) {
 		// the parent team's lock guards the job control entry -- acquire it
 		team->LockTeamAndParent(false);
@@ -2749,7 +2710,7 @@ process_group_has_stopped_processes(ProcessGroup* group)
 
 		team->UnlockTeamAndParent();
 
-		team = team->group_next;
+		team = group->teams.GetNext(team);
 	}
 
 	return false;
@@ -2820,9 +2781,8 @@ common_get_team_usage_info(team_id id, int32 who, team_usage_info* info,
 	switch (who) {
 		case B_TEAM_USAGE_SELF:
 		{
-			Thread* thread = team->thread_list;
-
-			for (; thread != NULL; thread = thread->team_next) {
+			for (Thread* thread = team->thread_list.First(); thread != NULL;
+					thread = team->thread_list.GetNext(thread)) {
 				InterruptsSpinLocker threadTimeLocker(thread->time_lock);
 				kernelTime += thread->kernel_time;
 				userTime += thread->user_time;
@@ -2835,13 +2795,12 @@ common_get_team_usage_info(team_id id, int32 who, team_usage_info* info,
 
 		case B_TEAM_USAGE_CHILDREN:
 		{
-			Team* child = team->children;
-			for (; child != NULL; child = child->siblings_next) {
+			Team* child = team->children.First();
+			for (; child != NULL; child = team->children.GetNext(child)) {
 				TeamLocker childLocker(child);
 
-				Thread* thread = team->thread_list;
-
-				for (; thread != NULL; thread = thread->team_next) {
+				for (Thread* thread = child->thread_list.First(); thread != NULL;
+						thread = child->thread_list.GetNext(thread)) {
 					InterruptsSpinLocker threadTimeLocker(thread->time_lock);
 					kernelTime += thread->kernel_time;
 					userTime += thread->user_time;
@@ -3162,7 +3121,7 @@ team_remove_team(Team* team, pid_t& _signalGroup)
 	remove_team_from_group(team);
 
 	// move the team's children to the kernel team
-	while (Team* child = team->children) {
+	while (Team* child = team->children.First()) {
 		// remove the child from the current team and add it to the kernel team
 		TeamLocker childLocker(child);
 
@@ -3170,9 +3129,9 @@ team_remove_team(Team* team, pid_t& _signalGroup)
 		insert_team_into_parent(sKernelTeam, child);
 
 		// move job control entries too
-		sKernelTeam->stopped_children.entries.MoveFrom(
+		sKernelTeam->stopped_children.entries.TakeFrom(
 			&team->stopped_children.entries);
-		sKernelTeam->continued_children.entries.MoveFrom(
+		sKernelTeam->continued_children.entries.TakeFrom(
 			&team->continued_children.entries);
 
 		// If the team was a session leader with controlling terminal,
@@ -3271,15 +3230,13 @@ team_shutdown_team(Team* team)
 		team->death_entry = &deathEntry;
 		deathEntry.remaining_threads = 0;
 
-		Thread* thread = team->thread_list;
-		while (thread != NULL) {
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			if (thread != team->main_thread) {
 				Signal signal(SIGKILLTHR, SI_USER, B_OK, team->id);
 				send_signal_to_thread(thread, signal, B_DO_NOT_RESCHEDULE);
 				deathEntry.remaining_threads++;
 			}
-
-			thread = thread->team_next;
 		}
 
 		if (deathEntry.remaining_threads == 0)
@@ -3290,9 +3247,7 @@ team_shutdown_team(Team* team)
 		deathEntry.condition.Add(&entry);
 
 		teamLocker.Unlock();
-
 		entry.Wait();
-
 		teamLocker.Lock();
 	}
 
@@ -3741,7 +3696,7 @@ AssociatedDataOwner::PrepareForDeletion()
 
 	// move all data to a temporary list and unset the owner
 	DataList list;
-	list.MoveFrom(&fList);
+	list.TakeFrom(&fList);
 
 	for (DataList::Iterator it = list.GetIterator();
 		AssociatedData* data = it.Next();) {
@@ -4501,6 +4456,15 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 		return B_BAD_ADDRESS;
 	}
 
+	Team* team = Team::Get(teamID);
+	if (team == NULL)
+		return B_BAD_TEAM_ID;
+	BReference<Team> teamReference(team, true);
+
+	uid_t uid = geteuid();
+	if (uid != 0 && uid != team->effective_uid)
+		return B_NOT_ALLOWED;
+
 	KMessage info;
 
 	if ((flags & B_TEAM_INFO_BASIC) != 0) {
@@ -4518,12 +4482,7 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 
 		io_context* ioContext;
 		{
-			// get the team structure
-			Team* team = Team::GetAndLock(teamID);
-			if (team == NULL)
-				return B_BAD_TEAM_ID;
-			BReference<Team> teamReference(team, true);
-			TeamLocker teamLocker(team, true);
+			TeamLocker teamLocker(team);
 
 			// copy the data
 			teamClone.id = team->id;
@@ -4558,7 +4517,7 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 		dev_t cwdDevice;
 		ino_t cwdDirectory;
 		{
-			MutexLocker ioContextLocker(ioContext->io_mutex);
+			ReadLocker ioContextLocker(ioContext->lock);
 			vfs_vnode_to_node_ref(ioContext->cwd, &cwdDevice, &cwdDirectory);
 		}
 

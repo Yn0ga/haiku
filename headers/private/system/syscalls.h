@@ -28,6 +28,7 @@ struct fd_info;
 struct fd_set;
 struct fs_info;
 struct iovec;
+struct loadavg;
 struct msqid_ds;
 struct net_stat;
 struct pollfd;
@@ -173,8 +174,6 @@ extern void			_kern_exit_thread(status_t returnValue);
 extern status_t		_kern_cancel_thread(thread_id threadID,
 						void (*cancelFunction)(int));
 extern void			_kern_thread_yield(void);
-extern status_t		_kern_wait_for_thread(thread_id thread,
-						status_t *_returnCode);
 extern status_t		_kern_wait_for_thread_etc(thread_id thread, uint32 flags,
 						bigtime_t timeout, status_t *_returnCode);
 extern bool			_kern_has_data(thread_id thread);
@@ -214,6 +213,7 @@ extern bigtime_t	_kern_estimate_max_scheduling_latency(thread_id thread);
 
 extern status_t		_kern_set_scheduler_mode(int32 mode);
 extern int32		_kern_get_scheduler_mode(void);
+extern status_t		_kern_get_loadavg(struct loadavg* info, size_t size);
 
 // user/group functions
 extern gid_t		_kern_getgid(bool effective);
@@ -278,7 +278,7 @@ extern int			_kern_open_dir(int fd, const char *path);
 extern int			_kern_open_parent_dir(int fd, char *name,
 						size_t nameLength);
 extern status_t		_kern_fcntl(int fd, int op, size_t argument);
-extern status_t		_kern_fsync(int fd);
+extern status_t		_kern_fsync(int fd, bool dataOnly);
 extern status_t		_kern_flock(int fd, int op);
 extern off_t		_kern_seek(int fd, off_t pos, int seekType);
 extern status_t		_kern_create_dir_entry_ref(dev_t device, ino_t inode,
@@ -295,7 +295,7 @@ extern status_t		_kern_unlink(int fd, const char *path);
 extern status_t		_kern_rename(int oldDir, const char *oldpath, int newDir,
 						const char *newpath);
 extern status_t		_kern_create_fifo(int fd, const char *path, mode_t perms);
-extern status_t		_kern_create_pipe(int *fds);
+extern status_t		_kern_create_pipe(int *fds, int flags);
 extern status_t		_kern_access(int fd, const char *path, int mode,
 						bool effectiveUserGroup);
 extern ssize_t		_kern_select(int numfds, struct fd_set *readSet,
@@ -349,12 +349,13 @@ extern status_t		_kern_write_stat(int fd, const char *path,
 						size_t statSize, int statMask);
 extern status_t		_kern_close(int fd);
 extern int			_kern_dup(int fd);
-extern int			_kern_dup2(int ofd, int nfd);
+extern int			_kern_dup2(int ofd, int nfd, int flags);
 extern status_t		_kern_lock_node(int fd);
 extern status_t		_kern_unlock_node(int fd);
 extern status_t		_kern_get_next_fd_info(team_id team, uint32 *_cookie,
 						struct fd_info *info, size_t infoSize);
 extern status_t		_kern_preallocate(int fd, off_t offset, off_t length);
+extern status_t		_kern_close_range(u_int minFd, u_int maxFd, int flags);
 
 // socket functions
 extern int			_kern_socket(int family, int type, int protocol);
@@ -365,7 +366,7 @@ extern status_t		_kern_connect(int socket, const struct sockaddr *address,
 						socklen_t addressLength);
 extern status_t		_kern_listen(int socket, int backlog);
 extern int			_kern_accept(int socket, struct sockaddr *address,
-						socklen_t *_addressLength);
+						socklen_t *_addressLength, int flags);
 extern ssize_t		_kern_recv(int socket, void *data, size_t length,
 						int flags);
 extern ssize_t		_kern_recvfrom(int socket, void *data, size_t length,
@@ -412,6 +413,7 @@ extern status_t		_kern_get_real_time_clock_is_gmt(bool *_isGMT);
 
 extern status_t		_kern_get_clock(clockid_t clockID, bigtime_t* _time);
 extern status_t		_kern_set_clock(clockid_t clockID, bigtime_t time);
+extern status_t		_kern_get_cpuclockid(thread_id id, int32 which, clockid_t* _clockID);
 
 extern bigtime_t	_kern_system_time();
 extern status_t		_kern_snooze_etc(bigtime_t time, int timebase, int32 flags,

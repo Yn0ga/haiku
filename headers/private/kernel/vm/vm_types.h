@@ -107,7 +107,6 @@ typedef phys_addr_t page_num_t;
 
 struct VMCacheRef {
 			VMCache*			cache;
-			int32				ref_count;
 
 								VMCacheRef(VMCache* cache);
 };
@@ -123,6 +122,8 @@ private:
 public:
 	page_num_t				cache_offset;
 								// in page size units
+								// TODO: Only 32 bit on 32 bit platforms!
+								// Introduce a new 64 bit type page_off_t!
 
 	SplayTreeLink<vm_page>	cache_link;
 	vm_page*				cache_next;
@@ -146,7 +147,6 @@ private:
 public:
 	bool					busy : 1;
 	bool					busy_writing : 1;
-		// used in VMAnonymousCache::Merge()
 	bool					accessed : 1;
 	bool					modified : 1;
 	uint8					_unused : 1;

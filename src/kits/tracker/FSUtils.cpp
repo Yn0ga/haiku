@@ -120,17 +120,17 @@ static status_t FSDeleteFolder(BEntry*, CopyLoopControl*, bool updateStatus,
 static status_t MoveEntryToTrash(BEntry*, BPoint*, Undo &undo);
 static void LowLevelCopy(BEntry*, StatStruct*, BDirectory*, char* destName,
 	CopyLoopControl*, BPoint*);
-status_t DuplicateTask(BObjectList<entry_ref>* srcList);
-static status_t MoveTask(BObjectList<entry_ref>*, BEntry*, BList*, uint32);
-static status_t _DeleteTask(BObjectList<entry_ref>*, bool);
-static status_t _RestoreTask(BObjectList<entry_ref>*);
+status_t DuplicateTask(BObjectList<entry_ref, true>* srcList);
+static status_t MoveTask(BObjectList<entry_ref, true>*, BEntry*, BList*, uint32);
+static status_t _DeleteTask(BObjectList<entry_ref, true>*, bool);
+static status_t _RestoreTask(BObjectList<entry_ref, true>*);
 status_t CalcItemsAndSize(CopyLoopControl* loopControl,
-	BObjectList<entry_ref>* refList, ssize_t blockSize, int32* totalCount,
+	BObjectList<entry_ref, true>* refList, ssize_t blockSize, int32* totalCount,
 	off_t* totalSize);
 status_t MoveItem(BEntry* entry, BDirectory* destDir, BPoint* loc,
 	uint32 moveMode, const char* newName, Undo &undo,
 	CopyLoopControl* loopControl);
-ConflictCheckResult PreFlightNameCheck(BObjectList<entry_ref>* srcList,
+ConflictCheckResult PreFlightNameCheck(BObjectList<entry_ref, true>* srcList,
 	const BDirectory* destDir, int32* collisionCount, uint32 moveMode);
 status_t CheckName(uint32 moveMode, const BEntry* srcEntry,
 	const BDirectory* destDir, bool multipleCollisions,
@@ -542,7 +542,7 @@ SetupPoseLocation(ino_t sourceParentIno, ino_t destParentIno, const BNode* sourc
 
 
 void
-FSMoveToFolder(BObjectList<entry_ref>* srcList, BEntry* destEntry,
+FSMoveToFolder(BObjectList<entry_ref, true>* srcList, BEntry* destEntry,
 	uint32 moveMode, BList* pointList)
 {
 	if (srcList->IsEmpty()) {
@@ -560,14 +560,14 @@ FSMoveToFolder(BObjectList<entry_ref>* srcList, BEntry* destEntry,
 void
 FSDelete(entry_ref* ref, bool async, bool confirm)
 {
-	BObjectList<entry_ref>* list = new BObjectList<entry_ref>(1, true);
+	BObjectList<entry_ref, true>* list = new BObjectList<entry_ref, true>(1);
 	list->AddItem(ref);
 	FSDeleteRefList(list, async, confirm);
 }
 
 
 void
-FSDeleteRefList(BObjectList<entry_ref>* list, bool async, bool confirm)
+FSDeleteRefList(BObjectList<entry_ref, true>* list, bool async, bool confirm)
 {
 	if (async) {
 		LaunchInNewThread("DeleteTask", B_NORMAL_PRIORITY, _DeleteTask, list,
@@ -578,7 +578,7 @@ FSDeleteRefList(BObjectList<entry_ref>* list, bool async, bool confirm)
 
 
 void
-FSRestoreRefList(BObjectList<entry_ref>* list, bool async)
+FSRestoreRefList(BObjectList<entry_ref, true>* list, bool async)
 {
 	if (async) {
 		LaunchInNewThread("RestoreTask", B_NORMAL_PRIORITY, _RestoreTask,
@@ -589,7 +589,7 @@ FSRestoreRefList(BObjectList<entry_ref>* list, bool async)
 
 
 void
-FSMoveToTrash(BObjectList<entry_ref>* srcList, BList* pointList, bool async)
+FSMoveToTrash(BObjectList<entry_ref, true>* srcList, BList* pointList, bool async)
 {
 	if (srcList->IsEmpty()) {
 		delete srcList;
@@ -624,7 +624,7 @@ ConfirmChangeIfWellKnownDirectory(const BEntry* entry, DestructiveAction action,
 	if (confirmedAlready && *confirmedAlready == kConfirmedAll)
 		return true;
 
-	if (FSIsDeskDir(entry) || FSIsTrashDir(entry) || FSIsRootDir(entry))
+	if (FSIsDeskDir(entry) || FSIsPrintersDir(entry) || FSIsRootDir(entry) || FSIsTrashDir(entry))
 		return false;
 
 	if ((!DirectoryMatchesOrContains(entry, B_SYSTEM_DIRECTORY)
@@ -876,7 +876,7 @@ ShouldEditRefName(const entry_ref* ref, const char* name, size_t length)
 
 static status_t
 InitCopy(CopyLoopControl* loopControl, uint32 moveMode,
-	BObjectList<entry_ref>* srcList, BVolume* dstVol, BDirectory* destDir,
+	BObjectList<entry_ref, true>* srcList, BVolume* dstVol, BDirectory* destDir,
 	entry_ref* destRef, bool preflightNameCheck, bool needSizeCalculation,
 	int32* collisionCount, ConflictCheckResult* preflightResult)
 {
@@ -891,26 +891,44 @@ InitCopy(CopyLoopControl* loopControl, uint32 moveMode,
 		BEntry entry((entry_ref*)srcList->ItemAt(index));
 		if (FSIsRootDir(&entry)) {
 			BString errorStr;
-			if (moveMode == kCreateLink) {
-				errorStr.SetTo(
-					B_TRANSLATE("You cannot create a link to the root "
-					"directory."));
-			} else {
-				errorStr.SetTo(
-					B_TRANSLATE("You cannot copy or move the root "
-					"directory."));
-			}
+			if (moveMode == kCreateLink || moveMode == kCreateRelativeLink)
+				errorStr.SetTo(B_TRANSLATE("You cannot create a link to the root directory."));
+			else
+				errorStr.SetTo(B_TRANSLATE("You cannot copy or move the root directory."));
 
-			BAlert* alert = new BAlert("", errorStr.String(),
-				B_TRANSLATE("Cancel"), 0, 0, B_WIDTH_AS_USUAL,
-				B_WARNING_ALERT);
+			BAlert* alert = new BAlert("", errorStr.String(), B_TRANSLATE("Cancel"), 0, 0,
+				B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 			alert->Go();
+
+			return B_ERROR;
+		} else if (FSIsTrashDir(&entry)) {
+			BString errorStr;
+			if (moveMode == kCreateLink || moveMode == kCreateRelativeLink)
+				errorStr.SetTo(B_TRANSLATE("You cannot create a link to the Trash directory."));
+			else
+				errorStr.SetTo(B_TRANSLATE("You cannot copy or move the Trash directory."));
+
+			BAlert* alert = new BAlert("", errorStr.String(), B_TRANSLATE("Cancel"), 0, 0,
+				B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+			alert->Go();
+
+			return B_ERROR;
+		} else if (FSIsPrintersDir(&entry)
+			&& (moveMode == kCopySelectionTo || moveMode == kMoveSelectionTo)) {
+			BString errorStr(B_TRANSLATE("You cannot copy or move the Printers directory."));
+
+			BAlert* alert = new BAlert("", errorStr.String(), B_TRANSLATE("Cancel"), 0, 0,
+				B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+			alert->Go();
+
 			return B_ERROR;
 		}
+
 		if (moveMode == kMoveSelectionTo
-			&& !ConfirmChangeIfWellKnownDirectory(&entry, kMove,
-				false, &askOnceOnly)) {
+			&& !ConfirmChangeIfWellKnownDirectory(&entry, kMove, false, &askOnceOnly)) {
 			return B_ERROR;
 		}
 	}
@@ -997,7 +1015,7 @@ delete_point(void* point)
 
 
 static status_t
-MoveTask(BObjectList<entry_ref>* srcList, BEntry* destEntry, BList* pointList, uint32 moveMode)
+MoveTask(BObjectList<entry_ref, true>* srcList, BEntry* destEntry, BList* pointList, uint32 moveMode)
 {
 	ASSERT(!srcList->IsEmpty());
 
@@ -1306,27 +1324,6 @@ CopyFile(BEntry* srcFile, StatStruct* srcStat, BDirectory* destDir,
 	} catch (status_t err) {
 		if (err == kCopyCanceled)
 			throw (status_t)err;
-
-		if (err == B_FILE_EXISTS) {
-			// A file with the same name was created after BDirectory::FindEntry was called and
-			// before LowLevelCopy could finish.  In a move operation, if the standard file error
-			// alert were displayed and the user chose to continue, the file that we just failed
-			// to copy would be lost.  Don't offer the option to continue.
-			BString lowLevelExistsString(
-				B_TRANSLATE("Error copying file \"%name\":\n\t%error\n\n"));
-			// The error may have resulted from the user dragging a set of selected files to a
-			// case-insensitive volume, when 2 files in the set differ only in case.
-			node_ref destRef;
-			destDir->GetNodeRef(&destRef);
-			fs_info destInfo;
-			_kern_read_fs_info(destRef.device, &destInfo);
-			if (strcmp(destInfo.fsh_name, "fat") == 0) {
-				lowLevelExistsString += B_TRANSLATE("Note: file names in the destination file "
-					"system are not case-sensitive.\n");
-			}
-			loopControl->FileError(lowLevelExistsString.String(), destName, err, false);
-			throw (status_t)err;
-		}
 
 		if (err != B_OK) {
 			if (!loopControl->FileError(
@@ -1939,7 +1936,7 @@ MoveItem(BEntry* entry, BDirectory* destDir, BPoint* loc, uint32 moveMode,
 
 
 void
-FSDuplicate(BObjectList<entry_ref>* srcList, BList* pointList)
+FSDuplicate(BObjectList<entry_ref, true>* srcList, BList* pointList)
 {
 	LaunchInNewThread("DupTask", B_NORMAL_PRIORITY, MoveTask, srcList,
 		(BEntry*)NULL, pointList, kDuplicateSelection);
@@ -2153,7 +2150,7 @@ MoveEntryToTrash(BEntry* entry, BPoint* loc, Undo &undo)
 
 
 ConflictCheckResult
-PreFlightNameCheck(BObjectList<entry_ref>* srcList, const BDirectory* destDir,
+PreFlightNameCheck(BObjectList<entry_ref, true>* srcList, const BDirectory* destDir,
 	int32* collisionCount, uint32 moveMode)
 {
 	// count the number of name collisions in dest folder
@@ -2609,7 +2606,7 @@ FSRecursiveCalcSize(BInfoWindow* window, CopyLoopControl* loopControl,
 
 status_t
 CalcItemsAndSize(CopyLoopControl* loopControl,
-	BObjectList<entry_ref>* refList, ssize_t blockSize, int32* totalCount,
+	BObjectList<entry_ref, true>* refList, ssize_t blockSize, int32* totalCount,
 	off_t* totalSize)
 {
 	int32 fileCount = 0;
@@ -2700,32 +2697,10 @@ FSGetTrashDir(BDirectory* trashDir, dev_t dev)
 		PoseInfo poseInfo;
 		poseInfo.fInvisible = true;
 		poseInfo.fInitedDirectory = sbuf.st_ino;
-		trashDir->WriteAttr(kAttrPoseInfo, B_RAW_TYPE, 0, &poseInfo,
-			sizeof(PoseInfo));
+		trashDir->WriteAttr(kAttrPoseInfo, B_RAW_TYPE, 0, &poseInfo, sizeof(PoseInfo));
 	}
 
-	// set Trash icons (if they haven't already been set)
-	attr_info attrInfo;
-	size_t size;
-	const void* data;
-	if (trashDir->GetAttrInfo(kAttrLargeIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource('ICON', R_TrashIcon, &size);
-		if (data != NULL)
-			trashDir->WriteAttr(kAttrLargeIcon, 'ICON', 0, data, size);
-	}
-
-	if (trashDir->GetAttrInfo(kAttrMiniIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource('MICN', R_TrashIcon, &size);
-		if (data != NULL)
-			trashDir->WriteAttr(kAttrMiniIcon, 'MICN', 0, data, size);
-	}
-
-	if (trashDir->GetAttrInfo(kAttrIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource(B_VECTOR_ICON_TYPE,
-			R_TrashIcon, &size);
-		if (data != NULL)
-			trashDir->WriteAttr(kAttrIcon, B_VECTOR_ICON_TYPE, 0, data, size);
-	}
+	// icon attributes set by TrashWatcher
 
 	return B_OK;
 }
@@ -2747,27 +2722,38 @@ FSGetDeskDir(BDirectory* deskDir)
 		return result;
 
 	// set Desktop icons (if they haven't already been set)
+	bool gotIcon = true;
 	attr_info attrInfo;
 	size_t size;
 	const void* data;
-	if (deskDir->GetAttrInfo(kAttrLargeIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource('ICON', R_DeskIcon, &size);
-		if (data != NULL)
-			deskDir->WriteAttr(kAttrLargeIcon, 'ICON', 0, data, size);
-	}
-
-	if (deskDir->GetAttrInfo(kAttrMiniIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource('MICN', R_DeskIcon, &size);
-		if (data != NULL)
-			deskDir->WriteAttr(kAttrMiniIcon, 'MICN', 0, data, size);
+	if (deskDir->GetAttrInfo(kAttrIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
+		// write vector icon attribute
+		data = GetTrackerResources()->LoadResource(B_VECTOR_ICON_TYPE, R_DeskIcon, &size);
+		if (data != NULL && size > 0)
+			deskDir->WriteAttr(kAttrIcon, B_VECTOR_ICON_TYPE, 0, data, size);
 	}
 
 	if (deskDir->GetAttrInfo(kAttrIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
-		data = GetTrackerResources()->LoadResource(B_VECTOR_ICON_TYPE,
-			R_DeskIcon, &size);
-		if (data != NULL)
-			deskDir->WriteAttr(kAttrIcon, B_VECTOR_ICON_TYPE, 0, data, size);
+		// write large and mini icon attributes
+		if (deskDir->GetAttrInfo(kAttrLargeIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
+			data = GetTrackerResources()->LoadResource('ICON', R_DeskIcon, &size);
+			if (data != NULL && size > 0)
+				deskDir->WriteAttr(kAttrLargeIcon, 'ICON', 0, data, size);
+			else
+				gotIcon = false;
+		}
+
+		if (deskDir->GetAttrInfo(kAttrMiniIcon, &attrInfo) == B_ENTRY_NOT_FOUND) {
+			data = GetTrackerResources()->LoadResource('MICN', R_DeskIcon, &size);
+			if (data != NULL && size > 0)
+				deskDir->WriteAttr(kAttrMiniIcon, 'MICN', 0, data, size);
+			else
+				gotIcon = false;
+		}
 	}
+
+	if (!gotIcon)
+		TRESPASS();
 
 	return B_OK;
 }
@@ -2841,9 +2827,33 @@ FSIsDeskDir(const BEntry* entry)
 
 
 bool
+FSInDeskDir(const entry_ref* ref)
+{
+	BEntry entry(ref);
+	if (entry.InitCheck() != B_OK)
+		return false;
+
+	BPath path;
+	if (find_directory(B_DESKTOP_DIRECTORY, &path, true) != B_OK)
+		return false;
+
+	BDirectory desktop(path.Path());
+	return desktop.Contains(&entry);
+}
+
+
+bool
 FSIsHomeDir(const BEntry* entry)
 {
 	return FSIsDirFlavor(entry, B_USER_DIRECTORY);
+}
+
+
+bool
+FSIsQueriesDir(const entry_ref* ref)
+{
+	const BEntry entry(ref);
+	return DirectoryMatches(&entry, "queries", B_USER_DIRECTORY);
 }
 
 
@@ -2855,6 +2865,18 @@ FSIsRootDir(const BEntry* entry)
 		return false;
 
 	return strcmp(path.Path(), "/") == 0;
+}
+
+
+bool
+FSInRootDir(const entry_ref* ref)
+{
+	BEntry entry(ref);
+	if (entry.InitCheck() != B_OK)
+		return false;
+
+	BDirectory root("/");
+	return root.Contains(&entry);
 }
 
 
@@ -2980,7 +3002,7 @@ empty_trash(void*)
 	TrackerCopyLoopControl loopControl(kTrashState);
 
 	// calculate the sum total of all items on all volumes in trash
-	BObjectList<entry_ref> srcList;
+	BObjectList<entry_ref, true> srcList;
 	int32 totalCount = 0;
 	off_t totalSize = 0;
 
@@ -3000,11 +3022,14 @@ empty_trash(void*)
 		entry_ref ref;
 		entry.GetRef(&ref);
 		srcList.AddItem(&ref);
+
 		status = CalcItemsAndSize(&loopControl, &srcList, volume.BlockSize(),
 			&totalCount, &totalSize);
 		if (status != B_OK)
 			break;
 
+		srcList.RemoveItemAt(0);
+			// so that the list doesn't try to free the entry we added above
 		srcList.MakeEmpty();
 
 		// don't count trash directory itself
@@ -3041,7 +3066,7 @@ empty_trash(void*)
 
 
 status_t
-_DeleteTask(BObjectList<entry_ref>* list, bool confirm)
+_DeleteTask(BObjectList<entry_ref, true>* list, bool confirm)
 {
 	if (confirm) {
 		BAlert* alert = new BAlert("",
@@ -3134,7 +3159,7 @@ FSRecursiveCreateFolder(BPath path)
 }
 
 status_t
-_RestoreTask(BObjectList<entry_ref>* list)
+_RestoreTask(BObjectList<entry_ref, true>* list)
 {
 	TrackerCopyLoopControl loopControl(kRestoreFromTrashState);
 
@@ -3204,7 +3229,7 @@ FSCreateTrashDirs()
 
 	roster.Rewind();
 	while (roster.GetNextVolume(&volume) == B_OK) {
-		if (volume.IsReadOnly() || !volume.IsPersistent())
+		if (volume.IsReadOnly() || !volume.IsPersistent() || volume.Capacity() == 0)
 			continue;
 
 		BDirectory trashDir;

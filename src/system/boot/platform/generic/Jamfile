@@ -11,16 +11,14 @@ for platform in [ MultiBootSubDirSetup ] {
 		BootStaticLibrary boot_platform_generic_$(platform:G=) :
 			text_console.cpp
 			text_menu.cpp
-			video_blit.cpp
 			video_splash.cpp
 		;
 		Includes [ FGristFiles video_splash.cpp ]
 			: [ BuildFeatureAttribute zlib : headers ] ;
 
-
 		local kernelDebugSources =
 			font.cpp
-			font_spleen.cpp
+			font_big.cpp
 			frame_buffer_console.cpp
 		;
 		BootStaticLibrary boot_video_text_console_$(platform:G=) :

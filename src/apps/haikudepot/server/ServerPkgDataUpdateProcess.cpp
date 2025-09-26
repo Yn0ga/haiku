@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -17,61 +17,76 @@
 #include <StopWatch.h>
 #include <Url.h>
 
-#include "Logger.h"
-#include "ServerSettings.h"
-#include "StorageUtils.h"
 #include "DumpExportPkg.h"
 #include "DumpExportPkgCategory.h"
 #include "DumpExportPkgJsonListener.h"
 #include "DumpExportPkgScreenshot.h"
 #include "DumpExportPkgVersion.h"
 #include "HaikuDepotConstants.h"
+#include "Logger.h"
+#include "PackageUtils.h"
+#include "ServerSettings.h"
+#include "StorageUtils.h"
 
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "ServerPkgDataUpdateProcess"
 
 
-/*! This package listener (not at the JSON level) is feeding in the
-    packages as they are parsed and processing them.
+static std::size_t kPackageBatchSize = 100;
+
+static uint32 kPackageChangeMask = PKG_CHANGED_RATINGS | PKG_CHANGED_SCREENSHOTS
+	| PKG_CHANGED_CLASSIFICATION | PKG_CHANGED_LOCALIZED_TEXT | PKG_CHANGED_LOCAL_INFO
+	| PKG_CHANGED_CORE_INFO;
+
+
+/*!	This package listener (not at the JSON level) is feeding in the
+	packages as they are parsed and processing them.
 */
 
 class PackageFillingPkgListener : public DumpExportPkgListener {
 public:
-								PackageFillingPkgListener(Model *model,
-									BString& depotName, Stoppable* stoppable);
+								PackageFillingPkgListener(Model *model, Stoppable* stoppable);
 	virtual						~PackageFillingPkgListener();
 
-	virtual bool				ConsumePackage(const PackageInfoRef& package,
-									DumpExportPkg* pkg);
 	virtual	bool				Handle(DumpExportPkg* item);
 	virtual	void				Complete();
 
 			uint32				Count();
 
 private:
-			int32				IndexOfPackageByName(const BString& name) const;
+	static	ScreenshotInfoRef	_CreateScreenshot(DumpExportPkgScreenshot* screenshot);
+
+			void				_FlushUpdatedPackages();
+
+			const PackageInfoRef
+								_PackageForName(const BString& name) const;
+			const PackageInfoRef
+								_CreateUpdatePackage(const PackageInfoRef& package,
+                                	const DumpExportPkg* pkg);
+
+			void				_InitCategories();
 
 private:
-			BString				fDepotName;
 			Model*				fModel;
-			std::vector<CategoryRef>
+			std::map<BString, CategoryRef>
 								fCategories;
+			std::vector<PackageInfoRef>
+								fUpdatedPackages;
 			Stoppable*			fStoppable;
 			uint32				fCount;
 			bool				fDebugEnabled;
 };
 
 
-PackageFillingPkgListener::PackageFillingPkgListener(Model* model,
-	BString& depotName, Stoppable* stoppable)
+PackageFillingPkgListener::PackageFillingPkgListener(Model* model, Stoppable* stoppable)
 	:
-	fDepotName(depotName),
 	fModel(model),
 	fStoppable(stoppable),
 	fCount(0),
 	fDebugEnabled(Logger::IsDebugEnabled())
 {
+	_InitCategories();
 }
 
 
@@ -80,88 +95,143 @@ PackageFillingPkgListener::~PackageFillingPkgListener()
 }
 
 
-bool
-PackageFillingPkgListener::ConsumePackage(const PackageInfoRef& package,
-	DumpExportPkg* pkg)
+void
+PackageFillingPkgListener::_InitCategories()
+{
+	std::vector<CategoryRef> categories = fModel->Categories();
+	std::vector<CategoryRef>::const_iterator it;
+
+	for (it = categories.begin(); it != categories.end(); it++) {
+		const CategoryRef& category = *it;
+		fCategories[category->Code()] = category;
+	}
+
+	if (fCategories.empty())
+		HDERROR("there are no categories present");
+}
+
+
+const PackageInfoRef
+PackageFillingPkgListener::_PackageForName(const BString& name) const
+{
+	return fModel->PackageForName(name);
+}
+
+
+void
+PackageFillingPkgListener::_FlushUpdatedPackages()
+{
+	fModel->AddPackagesWithChange(fUpdatedPackages, kPackageChangeMask);
+	fUpdatedPackages.clear();
+}
+
+
+/*!	This method will produce a new package with the data provided by the
+	server.
+*/
+const PackageInfoRef
+PackageFillingPkgListener::_CreateUpdatePackage(const PackageInfoRef& package,
+	const DumpExportPkg* pkg)
 {
 	int32 i;
 
-		// Collects all of the changes here into one set of notifications to
-		// the package's listeners.  This way the quantity of BMessages
-		// communicated back to listeners is considerably reduced.  See stop
-		// invocation later in this method.
+	PackageClassificationInfoBuilder classificationInfoBuilder(
+		package->PackageClassificationInfo());
+	PackageLocalizedTextBuilder localizedTextBuilder(package->LocalizedText());
+	PackageLocalInfoBuilder localInfoBuilder(package->LocalInfo());
+	PackageCoreInfoBuilder coreInfoBuilder(package->CoreInfo());
+	PackageScreenshotInfoBuilder screenshotInfoBuilder;
+		// don't want to start with the existing data; just take what comes from the server.
+	PackageUserRatingInfoBuilder userRatingBuilder;
 
-	package->StartCollatingChanges();
+	localizedTextBuilder.WithHasChangelog(pkg->HasChangelog());
 
 	if (0 != pkg->CountPkgVersions()) {
 
-			// this makes the assumption that the only version will be the
-			// latest one.
+		// this makes the assumption that the only version will be the
+		// latest one.
 
 		DumpExportPkgVersion* pkgVersion = pkg->PkgVersionsItemAt(0);
 
 		if (!pkgVersion->TitleIsNull())
-			package->SetTitle(*(pkgVersion->Title()));
+			localizedTextBuilder.WithTitle(*(pkgVersion->Title()));
 
 		if (!pkgVersion->SummaryIsNull())
-			package->SetShortDescription(*(pkgVersion->Summary()));
+			localizedTextBuilder.WithSummary(*(pkgVersion->Summary()));
 
 		if (!pkgVersion->DescriptionIsNull())
-			package->SetFullDescription(*(pkgVersion->Description()));
+			localizedTextBuilder.WithDescription(*(pkgVersion->Description()));
 
 		if (!pkgVersion->PayloadLengthIsNull())
-			package->SetSize(static_cast<off_t>(pkgVersion->PayloadLength()));
+			localInfoBuilder.WithSize(static_cast<off_t>(pkgVersion->PayloadLength()));
 
-		if (!pkgVersion->CreateTimestampIsNull())
-			package->SetVersionCreateTimestamp(pkgVersion->CreateTimestamp());
+		if (!pkgVersion->CreateTimestampIsNull()) {
+			PackageVersionRef versionRef = PackageUtils::Version(package);
+
+			if (versionRef.IsSet()) {
+				PackageVersion* version = versionRef.Get();
+				versionRef = PackageVersionRef(
+					new PackageVersion(*version, pkgVersion->CreateTimestamp()), true);
+			} else {
+				versionRef
+					= PackageVersionRef(new PackageVersion(pkgVersion->CreateTimestamp()), true);
+			}
+
+			coreInfoBuilder.WithVersion(versionRef);
+		}
+	}
+
+	if (!pkg->DerivedRatingIsNull()) {
+		// TODO; unify the naming here!
+		userRatingBuilder.WithSummary(UserRatingSummaryBuilder()
+				.WithAverageRating(pkg->DerivedRating())
+				.WithRatingCount(pkg->DerivedRatingSampleSize())
+				.BuildRef());
 	}
 
 	int32 countPkgCategories = pkg->CountPkgCategories();
 
 	for (i = 0; i < countPkgCategories; i++) {
 		BString* categoryCode = pkg->PkgCategoriesItemAt(i)->Code();
-		CategoryRef category = fModel->CategoryByCode(*categoryCode);
+		CategoryRef category = fCategories[*categoryCode];
 
-		if (!category.IsSet()) {
-			HDERROR("unable to find the category for [%s]",
-				categoryCode->String());
-		} else
-			package->AddCategory(category);
+		if (!category.IsSet())
+			HDERROR("unable to find the category for [%s]", categoryCode->String());
+		else
+			classificationInfoBuilder.AddCategory(category);
 	}
 
-	RatingSummary summary;
-	summary.averageRating = RATING_MISSING;
-
-	if (!pkg->DerivedRatingIsNull())
-		summary.averageRating = pkg->DerivedRating();
-
-	package->SetRatingSummary(summary);
-
-	package->SetHasChangelog(pkg->HasChangelog());
-
 	if (!pkg->ProminenceOrderingIsNull())
-		package->SetProminence(pkg->ProminenceOrdering());
+		classificationInfoBuilder.WithProminence(static_cast<uint32>(pkg->ProminenceOrdering()));
+
+	if (!pkg->IsNativeDesktopIsNull())
+		classificationInfoBuilder.WithIsNativeDesktop(pkg->IsNativeDesktop());
 
 	int32 countPkgScreenshots = pkg->CountPkgScreenshots();
 
 	for (i = 0; i < countPkgScreenshots; i++) {
 		DumpExportPkgScreenshot* screenshot = pkg->PkgScreenshotsItemAt(i);
-		package->AddScreenshotInfo(ScreenshotInfoRef(new ScreenshotInfo(
-			*(screenshot->Code()),
-			static_cast<int32>(screenshot->Width()),
-			static_cast<int32>(screenshot->Height()),
-			static_cast<int32>(screenshot->Length())
-		), true));
+		screenshotInfoBuilder.AddScreenshot(_CreateScreenshot(screenshot));
 	}
 
-	HDTRACE("did populate data for [%s] (%s)", pkg->Name()->String(),
-			fDepotName.String());
+	return PackageInfoBuilder(package)
+		.WithScreenshotInfo(screenshotInfoBuilder.BuildRef())
+		.WithUserRatingInfo(userRatingBuilder.BuildRef())
+		.WithLocalizedText(localizedTextBuilder.BuildRef())
+		.WithLocalInfo(localInfoBuilder.BuildRef())
+		.WithCoreInfo(coreInfoBuilder.BuildRef())
+		.WithPackageClassificationInfo(classificationInfoBuilder.BuildRef())
+		.BuildRef();
+}
 
-	fCount++;
 
-	package->EndCollatingChanges();
-
-	return !fStoppable->WasStopped();
+/*static*/ ScreenshotInfoRef
+PackageFillingPkgListener::_CreateScreenshot(DumpExportPkgScreenshot* screenshot)
+{
+	return ScreenshotInfoRef(
+		new ScreenshotInfo(*(screenshot->Code()), static_cast<int32>(screenshot->Width()),
+			static_cast<int32>(screenshot->Height()), static_cast<int32>(screenshot->Length())),
+		true);
 }
 
 
@@ -175,22 +245,19 @@ PackageFillingPkgListener::Count()
 bool
 PackageFillingPkgListener::Handle(DumpExportPkg* pkg)
 {
-	AutoLocker<BLocker> locker(fModel->Lock());
-	DepotInfoRef depot = fModel->DepotForName(fDepotName);
+	const BString packageName = *(pkg->Name());
+	PackageInfoRef package = _PackageForName(packageName);
 
-	if (depot.Get() != NULL) {
-		const BString packageName = *(pkg->Name());
-		PackageInfoRef package = depot->PackageByName(packageName);
-		if (package.Get() != NULL)
-			ConsumePackage(package, pkg);
-		else {
-			HDINFO("[PackageFillingPkgListener] unable to find the pkg [%s]",
-				packageName.String());
-		}
+	if (package.IsSet()) {
+		fUpdatedPackages.push_back(_CreateUpdatePackage(package, pkg));
+		HDTRACE("did populate data for [%s]", pkg->Name()->String());
+		fCount++;
 	} else {
-		HDINFO("[PackageFillingPkgListener] unable to find the depot [%s]",
-			fDepotName.String());
+		HDINFO("[PackageFillingPkgListener] unable to find the pkg [%s]", packageName.String());
 	}
+
+	if (fUpdatedPackages.size() > kPackageBatchSize)
+		_FlushUpdatedPackages();
 
 	return !fStoppable->WasStopped();
 }
@@ -199,12 +266,11 @@ PackageFillingPkgListener::Handle(DumpExportPkg* pkg)
 void
 PackageFillingPkgListener::Complete()
 {
+	_FlushUpdatedPackages();
 }
 
 
-ServerPkgDataUpdateProcess::ServerPkgDataUpdateProcess(
-	BString depotName,
-	Model *model,
+ServerPkgDataUpdateProcess::ServerPkgDataUpdateProcess(BString depotName, Model* model,
 	uint32 serverProcessOptions)
 	:
 	AbstractSingleFileServerProcess(serverProcessOptions),
@@ -212,9 +278,7 @@ ServerPkgDataUpdateProcess::ServerPkgDataUpdateProcess(
 	fDepotName(depotName)
 {
 	fName.SetToFormat("ServerPkgDataUpdateProcess<%s>", depotName.String());
-	fDescription.SetTo(
-		B_TRANSLATE("Synchronizing package data for repository "
-			"'%REPO_NAME%'"));
+	fDescription.SetTo(B_TRANSLATE("Synchronizing package data for repository '%REPO_NAME%'"));
 	fDescription.ReplaceAll("%REPO_NAME%", depotName.String());
 }
 
@@ -254,7 +318,6 @@ ServerPkgDataUpdateProcess::GetLocalPath(BPath& path) const
 	BString webAppRepositorySourceCode = _DeriveWebAppRepositorySourceCode();
 
 	if (!webAppRepositorySourceCode.IsEmpty()) {
-		AutoLocker<BLocker> locker(fModel->Lock());
 		return StorageUtils::DumpExportPkgDataPath(path, webAppRepositorySourceCode,
 			fModel->PreferredLanguage());
 	}
@@ -268,15 +331,12 @@ ServerPkgDataUpdateProcess::ProcessLocalData()
 {
 	BStopWatch watch("ServerPkgDataUpdateProcess::ProcessLocalData", true);
 
-	PackageFillingPkgListener* itemListener =
-		new PackageFillingPkgListener(fModel, fDepotName, this);
-	ObjectDeleter<PackageFillingPkgListener>
-		itemListenerDeleter(itemListener);
+	PackageFillingPkgListener* itemListener = new PackageFillingPkgListener(fModel, this);
+	ObjectDeleter<PackageFillingPkgListener> itemListenerDeleter(itemListener);
 
-	BulkContainerDumpExportPkgJsonListener* listener =
-		new BulkContainerDumpExportPkgJsonListener(itemListener);
-	ObjectDeleter<BulkContainerDumpExportPkgJsonListener>
-		listenerDeleter(listener);
+	BulkContainerDumpExportPkgJsonListener* listener
+		= new BulkContainerDumpExportPkgJsonListener(itemListener);
+	ObjectDeleter<BulkContainerDumpExportPkgJsonListener> listenerDeleter(listener);
 
 	BPath localPath;
 	status_t result = GetLocalPath(localPath);
@@ -291,8 +351,8 @@ ServerPkgDataUpdateProcess::ProcessLocalData()
 
 	if (Logger::IsInfoEnabled()) {
 		double secs = watch.ElapsedTime() / 1000000.0;
-		HDINFO("[%s] did process %" B_PRIi32 " packages' data "
-			"in  (%6.3g secs)", Name(), itemListener->Count(), secs);
+		HDINFO("[%s] did process %" B_PRIi32 " packages' data in  (%6.3g secs)", Name(),
+			itemListener->Count(), secs);
 	}
 
 	return listener->ErrorStatus();
@@ -307,8 +367,7 @@ ServerPkgDataUpdateProcess::GetStandardMetaDataPath(BPath& path) const
 
 
 void
-ServerPkgDataUpdateProcess::GetStandardMetaDataJsonPath(
-	BString& jsonPath) const
+ServerPkgDataUpdateProcess::GetStandardMetaDataJsonPath(BString& jsonPath) const
 {
 	jsonPath.SetTo("$.info");
 }
@@ -319,9 +378,8 @@ ServerPkgDataUpdateProcess::_DeriveWebAppRepositorySourceCode() const
 {
 	const DepotInfo* depot = fModel->DepotForName(fDepotName);
 
-	if (depot == NULL) {
+	if (depot == NULL)
 		return BString();
-	}
 
 	return depot->WebAppRepositorySourceCode();
 }
@@ -331,8 +389,8 @@ status_t
 ServerPkgDataUpdateProcess::RunInternal()
 {
 	if (_DeriveWebAppRepositorySourceCode().IsEmpty()) {
-		HDINFO("[%s] am not updating data for depot [%s] as there is no"
-			" web app repository source code available",
+		HDINFO("[%s] am not updating data for depot [%s] as there is no web app repository source "
+			   "code available",
 			Name(), fDepotName.String());
 		return B_OK;
 	}

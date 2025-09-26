@@ -44,7 +44,6 @@ All rights reserved.
 #include <string.h>
 #include <strings.h>
 
-#include <Alert.h>
 #include <Application.h>
 #include <Box.h>
 #include <Button.h>
@@ -72,6 +71,7 @@ All rights reserved.
 #include <SeparatorView.h>
 #include <Size.h>
 #include <SpaceLayoutItem.h>
+#include <StringFormat.h>
 #include <TextControl.h>
 #include <TextView.h>
 #include <View.h>
@@ -111,9 +111,6 @@ static const char* kDragNDropActionSpecifiers[] = {
 	B_TRANSLATE_MARK("Create a Query template")
 };
 
-static const char* kMultipleSelections = "multiple selections";
-static const char* kMultiSelectComment = "The user has selected multiple menu items";
-
 const uint32 kAttachFile = 'attf';
 
 const int32 operators[] = {
@@ -146,18 +143,18 @@ public:
 									int32 maxCount = 5);
 								~MostUsedNames();
 
-			bool				ObtainList(BList* list);
+			bool				ObtainList(BStringList* list);
 			void				ReleaseList();
 
-			void 				AddName(const char*);
+			void 				AddName(const BString&);
 
 protected:
 			struct list_entry {
-				char* name;
+				BString name;
 				int32 count;
 			};
 
-		static int CompareNames(const void* a, const void* b);
+		static int CompareNames(const list_entry* a, const list_entry* b);
 		void LoadList();
 		void UpdateList();
 
@@ -165,7 +162,7 @@ protected:
 		const char*	fDirectory;
 		bool		fLoaded;
 		mutable Benaphore fLock;
-		BList		fList;
+		BObjectList<list_entry> fList;
 		int32		fCount;
 };
 
@@ -216,26 +213,6 @@ MoreOptionsStruct::QueryTemporary(const BNode* node)
 //	#pragma mark - FindWindow
 
 
-int32
-GetNumberOfVolumes()
-{
-	static int32 numberOfVolumes = -1;
-	if (numberOfVolumes >= 0)
-		return numberOfVolumes;
-
-	int32 count = 0;
-	BVolumeRoster volumeRoster;
-	BVolume volume;
-	while (volumeRoster.GetNextVolume(&volume) == B_OK) {
-		if (volume.IsPersistent() && volume.KnowsQuery() && volume.KnowsAttr())
-			++count;
-	}
-
-	numberOfVolumes = count;
-	return numberOfVolumes;
-}
-
-
 FindWindow::FindWindow(const entry_ref* newRef, bool editIfTemplateOnly)
 	:
 	BWindow(BRect(), B_TRANSLATE("Find"), B_TITLED_WINDOW,
@@ -260,12 +237,12 @@ FindWindow::FindWindow(const entry_ref* newRef, bool editIfTemplateOnly)
 		}
 	} else {
 		// no initial query, fall back on the default query template
-		BEntry entry;
-		GetDefaultQuery(entry);
-		entry.GetRef(&fRef);
+		BDirectory directory(GetQueriesDirectory().Path());
+		BEntry entry(&directory, "default");
 
-		if (entry.Exists())
-			fFile = TryOpening(&fRef);
+		entry_ref defaultRef;
+		if (entry.Exists() && entry.GetRef(&defaultRef) == B_OK)
+			fFile = TryOpening(&defaultRef);
 		else {
 			// no default query template yet
 			fFile = new BFile(&entry, O_RDWR | O_CREAT);
@@ -317,11 +294,9 @@ FindWindow::BuildMenuBar()
 	fHistoryMenu = new BMenu(B_TRANSLATE("Recent queries"));
 	BMessenger messenger(fBackground);
 	FindPanel::AddRecentQueries(fHistoryMenu, false, &messenger, kSwitchToQueryTemplate, false);
-	if (fHistoryMenu->CountItems() > 0) {
-		fHistoryMenu->AddSeparatorItem();
-		fHistoryMenu->AddItem(new BMenuItem(B_TRANSLATE("Clear history"),
-			new BMessage(kClearHistory)));
-	}
+
+	IconMenuItem* historyMenuItem = new IconMenuItem(fHistoryMenu,
+		new BMessage(kOpenDir), B_DIR_MIMETYPE);
 
 	BMenuItem* saveAsQueryItem = new BMenuItem(B_TRANSLATE("Save as query" B_UTF8_ELLIPSIS), NULL);
 	BMessage* saveAsQueryMessage = new BMessage(kOpenSaveAsPanel);
@@ -340,7 +315,7 @@ FindWindow::BuildMenuBar()
 	fQueryMenu->AddItem(saveAsQueryItem);
 	fQueryMenu->AddItem(saveAsQueryTemplateItem);
 	fQueryMenu->AddSeparatorItem();
-	fQueryMenu->AddItem(fHistoryMenu);
+	fQueryMenu->AddItem(historyMenuItem);
 
 	fSearchInTrash = new BMenuItem(
 		B_TRANSLATE("Include Trash"), new BMessage(kSearchInTrashOptionClicked));
@@ -379,17 +354,6 @@ FindWindow::UpdateFileReferences(const entry_ref* ref)
 }
 
 
-void
-ClearMenu(BMenu* menu)
-{
-	int32 count = menu->CountItems();
-	for (int32 i = 0; i < count; i++) {
-		BMenuItem* item = menu->RemoveItem(static_cast<int32>(0));
-		delete item;
-	}
-}
-
-
 status_t
 FindWindow::DeleteQueryOrTemplate(BEntry* entry)
 {
@@ -412,69 +376,8 @@ FindWindow::DeleteQueryOrTemplate(BEntry* entry)
 }
 
 
-void
-FindWindow::ClearHistoryOrTemplates(bool clearTemplates, bool temporaryOnly)
-{
-	BVolumeRoster roster;
-	BVolume volume;
-	while (roster.GetNextVolume(&volume) == B_OK) {
-		if (volume.IsPersistent() && volume.KnowsQuery() && volume.KnowsAttr()) {
-			BQuery query;
-			query.SetVolume(&volume);
-			query.SetPredicate("_trk/recentQuery == 1");
-			if (query.Fetch() != B_OK)
-				continue;
-
-			BEntry entry;
-			entry_ref ref;
-			while (query.GetNextEntry(&entry) == B_OK) {
-				entry.GetRef(&ref);
-				if (FSInTrashDir(&ref) && !BEntry(&ref).Exists())
-					continue;
-				char type[B_MIME_TYPE_LENGTH];
-				BNodeInfo(new BNode(&entry)).GetType(type);
-				if (strcmp(type, B_QUERY_TEMPLATE_MIMETYPE) == 0) {
-					if (clearTemplates)
-						DeleteQueryOrTemplate(&entry);
-					else
-						continue;
-				}
-
-				if (!clearTemplates) {
-					BFile file(&entry, B_READ_ONLY);
-					bool isTemporary;
-					if (file.ReadAttr("_trk/temporary", B_BOOL_TYPE, 0, &isTemporary,
-						sizeof(isTemporary))
-					== sizeof(isTemporary)) {
-						if (!temporaryOnly) {
-							DeleteQueryOrTemplate(&entry);
-						} else {
-							if (isTemporary)
-								DeleteQueryOrTemplate(&entry);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if (clearTemplates) {
-		ClearMenu(fTemplatesMenu);
-	} else {
-		ClearMenu(fHistoryMenu);
-		BMessenger messenger(fBackground);
-		FindPanel::AddRecentQueries(fHistoryMenu, false, &messenger, kSwitchToQueryTemplate, false,
-			false, true);
-		if (fHistoryMenu->CountItems() > 0) {
-			fHistoryMenu->AddSeparatorItem();
-			fHistoryMenu->AddItem(new BMenuItem(B_TRANSLATE("Clear history"),
-				new BMessage(kClearHistory)));
-		}
-	}
-}
-
-bool
-CheckForDuplicates(BObjectList<entry_ref>* list, entry_ref* ref)
+static bool
+CheckForDuplicates(BObjectList<entry_ref, true>* list, entry_ref* ref)
 {
 	// Simple Helper Function To Check For Duplicates Within an Entry List of Templates
 	int32 count = list->CountItems();
@@ -490,8 +393,9 @@ CheckForDuplicates(BObjectList<entry_ref>* list, entry_ref* ref)
 void
 FindWindow::PopulateTemplatesMenu()
 {
-	ClearMenu(fTemplatesMenu);
-	BObjectList<entry_ref> templates(10, true);
+	fTemplatesMenu->RemoveItems(0, fTemplatesMenu->CountItems(), true);
+
+	BObjectList<entry_ref, true> templates(10);
 	BVolumeRoster roster;
 	BVolume volume;
 	while (roster.GetNextVolume(&volume) == B_OK) {
@@ -552,16 +456,16 @@ FindWindow::TryOpening(const entry_ref* ref)
 }
 
 
-void
-FindWindow::GetDefaultQuery(BEntry& entry)
+BPath
+FindWindow::GetQueriesDirectory()
 {
 	BPath path;
 	if (find_directory(B_USER_DIRECTORY, &path, true) == B_OK
-		&& path.Append("queries") == B_OK
-		&& (mkdir(path.Path(), 0777) == 0 || errno == EEXIST)) {
-		BDirectory directory(path.Path());
-		entry.SetTo(&directory, "default");
+			&& path.Append("queries") == B_OK
+			&& (mkdir(path.Path(), 0777) == 0 || errno == EEXIST)) {
+		return path;
 	}
+	return BPath();
 }
 
 
@@ -692,25 +596,6 @@ FindWindow::SaveQueryAttributes(BNode* file, bool queryTemplate)
 }
 
 
-void
-MarkVolumeAccordingToDirectoryFilter(BMenu* menu, entry_ref* ref)
-{
-	int32 startingIndex = 2;
-	int32 endingIndex = 2 + GetNumberOfVolumes();
-	for (int32 index = startingIndex; index < endingIndex; ++index) {
-		BMenuItem* item = menu->ItemAt(index);
-		if (item->IsMarked())
-			continue;
-		BMessage* message = item->Message();
-		dev_t device;
-		if (message->FindInt32("device", &device) != B_OK)
-			continue;
-		if (device == ref->device)
-			item->SetMarked(true);
-	}
-}
-
-
 status_t
 FindWindow::SaveQueryAsAttributes(BNode* file, BEntry* entry, bool queryTemplate,
 	const BMessage* oldAttributes, const BPoint* oldLocation, bool temporary)
@@ -743,18 +628,30 @@ FindWindow::SaveQueryAsAttributes(BNode* file, BEntry* entry, bool queryTemplate
 
 	fBackground->SaveDirectoryFiltersToFile(file);
 
-	BMenu* volMenu = fBackground->VolMenu();
+	int32 firstVolumeItem, volumeItemsCount;
+	BMenu* volMenu = fBackground->VolMenu(&firstVolumeItem, &volumeItemsCount);
 	ASSERT(volMenu != NULL);
 
 	int32 numberOfDirectoryFilters = fBackground->fDirectoryFilters.CountItems();
-	for (int32 i = 0; i < numberOfDirectoryFilters; ++i)
-		MarkVolumeAccordingToDirectoryFilter(volMenu, fBackground->fDirectoryFilters.ItemAt(i));
+	for (int32 i = 0; i < numberOfDirectoryFilters; ++i) {
+		const entry_ref* ref = fBackground->fDirectoryFilters.ItemAt(i);
+		for (int32 j = 0; j < volumeItemsCount; j++) {
+			BMenuItem* item = volMenu->ItemAt(firstVolumeItem + j);
+			if (item->IsMarked())
+				continue;
+			BMessage* message = item->Message();
+			dev_t device;
+			if (message->FindInt32("device", &device) != B_OK)
+				continue;
+			if (device == ref->device)
+				item->SetMarked(true);
+		}
+	}
 
 	bool addAllVolumes = volMenu->ItemAt(0)->IsMarked();
-	int32 numberOfVolumes = GetNumberOfVolumes();
 	BMessage messageContainingVolumeInfo;
-	for (int32 i = 2; i < numberOfVolumes + 2; ++i) {
-		BMenuItem* volumeMenuItem = volMenu->ItemAt(i);
+	for (int32 i = 0; i < volumeItemsCount; i++) {
+		BMenuItem* volumeMenuItem = volMenu->ItemAt(firstVolumeItem + i);
 		BMessage* messageOfVolumeMenuItem = volumeMenuItem->Message();
 		dev_t device;
 		if (messageOfVolumeMenuItem->FindInt32("device", &device) != B_OK)
@@ -777,8 +674,6 @@ FindWindow::SaveQueryAsAttributes(BNode* file, BEntry* entry, bool queryTemplate
 			return B_ERROR;
 		}
 	}
-
-	file->WriteAttr("_trk/temporary", B_BOOL_TYPE, 0, &temporary, sizeof(temporary));
 
 	MoreOptionsStruct saveMoreOptions;
 	saveMoreOptions.searchTrash = fSearchInTrash->IsMarked();
@@ -867,50 +762,6 @@ FindWindow::Find()
 }
 
 
-status_t
-FindWindow::GetQueryLastChangeTimeFromFile(BMessage* message)
-{
-	// params checking
-	if (message == NULL)
-		return B_BAD_VALUE;
-
-	struct attr_info info;
-	status_t error = fFile->GetAttrInfo(kAttrQueryLastChange, &info);
-	if (error == B_OK) {
-		if (info.type == B_MESSAGE_TYPE) {
-			char* buffer = new char[info.size];
-			ssize_t readSize = fFile->ReadAttr(kAttrQueryLastChange, B_MESSAGE_TYPE, 0, buffer,
-				static_cast<size_t>(info.size));
-			if (readSize == info.size) {
-				if (message->Unflatten(buffer) == B_OK) {
-					delete[] buffer;
-						// Delete the dynamically allocated memory in both situations
-					return B_OK;
-				} else {
-					delete[] buffer;
-						// Delete the dynamically allocated memory in both situations.
-					return B_ERROR;
-				}
-			}
-		} else if (info.type == B_INT32_TYPE) {
-			int32 previousChangedTime;
-			if (fFile->ReadAttr(kAttrQueryLastChange, B_INT32_TYPE, 0, &previousChangedTime,
-					(int32)info.size)
-				== sizeof(int32)) {
-				return message->AddInt32(kAttrQueryLastChange, previousChangedTime);
-			} else {
-				return B_ERROR;
-			}
-		}
-
-		// If it reaches till here, that means the entry type is wrong!
-		return B_BAD_VALUE;
-	} else {
-		return error;
-	}
-}
-
-
 bool
 FindWindow::FindSaveCommon(bool find)
 {
@@ -932,11 +783,7 @@ FindWindow::FindSaveCommon(bool find)
 		hadLocation = FSGetPoseLocation(fFile, &location);
 	}
 
-	BMessage message;
 	if (replaceOriginal) {
-		if (GetQueryLastChangeTimeFromFile(&message) != B_OK)
-			message.MakeEmpty();
-
 		fFile->Unset();
 		entry.Remove();
 			// remove the current entry - need to do this to quit the
@@ -951,11 +798,9 @@ FindWindow::FindSaveCommon(bool find)
 
 	if (newFile) {
 		// create query file in the user's directory
-		BPath path;
+		BPath path = GetQueriesDirectory();
 		// there might be no queries folder yet, create one
-		if (find_directory(B_USER_DIRECTORY, &path, true) == B_OK
-			&& path.Append("queries") == B_OK
-			&& (mkdir(path.Path(), 0777) == 0 || errno == EEXIST)) {
+		if (path.Path()[0] != '\0') {
 			// either use the user specified name, or go with the name
 			// generated from the predicate, etc.
 			BString name;
@@ -976,11 +821,8 @@ FindWindow::FindSaveCommon(bool find)
 	ASSERT(fFile->InitCheck() == B_OK);
 
 	int32 currentTime = (int32)time(0);
-	message.AddInt32(kAttrQueryLastChange, currentTime);
-	ssize_t size = message.FlattenedSize();
-	char* buffer = new char[size];
-	if (message.Flatten(buffer, size) == B_OK)
-		fFile->WriteAttr(kAttrQueryLastChange, B_MESSAGE_TYPE, 0, buffer, (int32)size);
+	fFile->WriteAttr(kAttrQueryLastChange, B_INT32_TYPE, 0, &currentTime,
+		sizeof(int32));
 
 	SaveQueryAsAttributes(fFile, &entry, !find, newFile ? 0 : &oldAttributes,
 		(hadLocation && keepPoseLocation) ? &location : 0, newFile);
@@ -993,6 +835,18 @@ void
 FindWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
+		case kOpenDir:
+		{
+			BMessage message(B_REFS_RECEIVED);
+			BEntry entry(GetQueriesDirectory().Path());
+			entry_ref ref;
+			if (entry.GetRef(&ref) == B_OK) {
+				message.AddRef("refs", &ref);
+				be_app->PostMessage(&message);
+			}
+			break;
+		}
+
 		case kFindButton:
 			Find();
 			break;
@@ -1005,23 +859,6 @@ FindWindow::MessageReceived(BMessage* message)
 		{
 			BEntry entry(&fRef);
 			SaveQueryAsAttributes(fFile, &entry, IsQueryTemplate(fFile), 0, 0, false);
-			break;
-		}
-
-		case kClearHistory:
-		{
-			// BAlert will manage its memory independently
-			BAlert* alert = new BAlert(B_TRANSLATE("Clear history?"),
-				B_TRANSLATE("Do you want to clear temporary queries or all queries?"
-					" This action is irreversible!"),
-				B_TRANSLATE("Cancel"),
-				B_TRANSLATE("Clear all"),
-				B_TRANSLATE("Clear temporary queries only"), B_WIDTH_AS_USUAL, B_OFFSET_SPACING,
-				B_WARNING_ALERT);
-			alert->SetShortcut(0, B_ESCAPE);
-			int32 choice = alert->Go();
-			if (choice)
-				ClearHistoryOrTemplates(false, choice == 2);
 			break;
 		}
 
@@ -1084,13 +921,11 @@ FindWindow::MessageReceived(BMessage* message)
 						// something reasonable happens
 				}
 			}
-		}
-		// Refresh Template Menu
-		ClearMenu(fTemplatesMenu);
-		PopulateTemplatesMenu();
 
-		fSaveQueryOrTemplateItem->SetEnabled(true);
-		break;
+			PopulateTemplatesMenu();
+			fSaveQueryOrTemplateItem->SetEnabled(true);
+			break;
+		}
 
 		case kSwitchToQueryTemplate:
 		{
@@ -1196,13 +1031,38 @@ FindPanel::FindPanel(BFile* node, FindWindow* parent, bool fromTemplate, bool ed
 			"The disks/folders that are searched. Similar to TextSearch's 'Set target'."),
 		fVolMenu);
 	fVolumeField->SetDivider(fVolumeField->StringWidth(fVolumeField->Label()) + 8);
-	AddVolumes(fVolMenu);
+	AddVolumes();
 	fVolMenu->AddSeparatorItem();
 	if (fDirectoryFilters.CountItems() > 0)
 		fVolMenu->AddSeparatorItem();
 	fVolMenu->AddItem(new BMenuItem(B_TRANSLATE("Select folders" B_UTF8_ELLIPSIS),
 		new BMessage(kSelectDirectoryFilter)));
 	LoadDirectoryFiltersFromFile(node);
+
+	if (!editTemplateOnly) {
+		BPoint draggableIconOrigin(0, 0);
+		BMessage dragNDropMessage(B_SIMPLE_DATA);
+		dragNDropMessage.AddInt32("be:actions", B_COPY_TARGET);
+		dragNDropMessage.AddString("be:types", B_FILE_MIME_TYPE);
+		dragNDropMessage.AddString("be:filetypes", kDragNDropTypes[0]);
+		dragNDropMessage.AddString("be:filetypes", kDragNDropTypes[1]);
+		dragNDropMessage.AddString("be:actionspecifier",
+			B_TRANSLATE_NOCOLLECT(kDragNDropActionSpecifiers[0]));
+		dragNDropMessage.AddString("be:actionspecifier",
+			B_TRANSLATE_NOCOLLECT(kDragNDropActionSpecifiers[1]));
+
+		BMessenger self(this);
+		BRect draggableRect = DraggableIcon::PreferredRect(draggableIconOrigin,
+			B_LARGE_ICON);
+		fDraggableIcon = new DraggableQueryIcon(draggableRect,
+			"saveHere", &dragNDropMessage, self,
+			B_FOLLOW_LEFT | B_FOLLOW_BOTTOM);
+		fDraggableIcon->SetExplicitMaxSize(
+			BSize(draggableRect.right - draggableRect.left,
+				draggableRect.bottom - draggableRect.top));
+		BCursor grabCursor(B_CURSOR_ID_GRAB);
+		fDraggableIcon->SetViewCursor(&grabCursor);
+	}
 
 	// add Search button
 	BButton* button;
@@ -1214,6 +1074,12 @@ FindPanel::FindPanel(BFile* node, FindWindow* parent, bool fromTemplate, bool ed
 			new BMessage(kFindButton), B_FOLLOW_RIGHT + B_FOLLOW_BOTTOM);
 	}
 	button->MakeDefault(true);
+
+	BView* icon = fDraggableIcon;
+	if (icon == NULL) {
+		icon = new BBox("no draggable icon", B_WILL_DRAW, B_NO_BORDER);
+		icon->SetExplicitMaxSize(BSize(0, 0));
+	}
 
 	BView* mimeTypeFieldSpacer = new BBox("MimeTypeMenuSpacer", B_WILL_DRAW, B_NO_BORDER);
 	mimeTypeFieldSpacer->SetExplicitMaxSize(BSize(0, 0));
@@ -1245,6 +1111,11 @@ FindPanel::FindPanel(BFile* node, FindWindow* parent, bool fromTemplate, bool ed
 		.SetInsets(B_USE_WINDOW_SPACING)
 		.Add(queryBox)
 		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+			.AddGroup(B_VERTICAL)
+				.AddGlue()
+				.Add(icon)
+				.AddGlue()
+			.End()
 			.AddGlue()
 			.AddGroup(B_VERTICAL)
 				.Add(button)
@@ -1423,10 +1294,15 @@ FindPanel::SaveDirectoryFiltersToFile(BNode* node)
 	if (node->InitCheck() != B_OK)
 		return B_NO_INIT;
 
+	int32 count = fDirectoryFilters.CountItems();
+	if (count == 0) {
+		node->RemoveAttr("_trk/directories");
+		return B_OK;
+	}
+
 	// Store the entry_refs of the fDirectoryFilters to a BMessage
 	// So that it can be serialized.
 	BMessage message;
-	int32 count = fDirectoryFilters.CountItems();
 	for (int32 i = 0; i < count; i++) {
 		entry_ref* ref = fDirectoryFilters.ItemAt(i);
 		if (message.AddRef("refs", ref) != B_OK)
@@ -1575,7 +1451,7 @@ FindPanel::ResizeMenuField(BMenuField* menuField)
 	// clip to reasonable min and max width
 	float minW = 0;
 	if (menuField == fVolumeField)
-		minW = menuField->StringWidth(B_TRANSLATE("Multiple selections"));
+		minW = menuField->StringWidth(MultipleSelectionsTitle(99));
 	else
 		minW = be_control_look->DefaultLabelSpacing() * 10;
 	float maxW = be_control_look->DefaultLabelSpacing() * 30;
@@ -1616,33 +1492,50 @@ void
 FindPanel::ShowVolumeMenuLabel()
 {
 	// find out if more than one items are marked
-	int32 totalVolumes = GetNumberOfVolumes();
 	int32 selectedVolumesCount = 0;
 
 	BMenuItem* lastSelectedVolumeItem = NULL;
-
-	for (int32 i = 2; i < totalVolumes + 2; ++i) {
-		BMenuItem* volumeItem = fVolMenu->ItemAt(i);
+	for (int32 i = 0; i < fVolumeItemsCount; ++i) {
+		BMenuItem* volumeItem = fVolMenu->ItemAt(fFirstVolumeItem + i);
 		if (volumeItem->IsMarked()) {
-			++selectedVolumesCount;
+			selectedVolumesCount++;
 			lastSelectedVolumeItem = volumeItem;
 		}
 	}
 
-	if (fDirectoryFilters.CountItems() > 1) {
-		PopUpMenuSetTitle(fVolMenu, B_TRANSLATE_COMMENT(kMultipleSelections, kMultiSelectComment));
-	} else if (fDirectoryFilters.CountItems() == 1) {
+	bool allVolumes = selectedVolumesCount == fVolumeItemsCount;
+
+	if (selectedVolumesCount == 0 && fDirectoryFilters.CountItems() == 1) {
+		// 1 directory filter selected
+		fVolMenu->ItemAt(0)->SetMarked(false);
 		PopUpMenuSetTitle(fVolMenu, fDirectoryFilters.ItemAt(0)->name);
-	} else if (selectedVolumesCount == 0 || selectedVolumesCount == totalVolumes) {
-		fVolMenu->ItemAt(0)->SetMarked(true);
-		PopUpMenuSetTitle(fVolMenu, fVolMenu->ItemAt(0)->Label());
-	} else if (selectedVolumesCount == 1) {
+	} else if (selectedVolumesCount == 1 && fDirectoryFilters.CountItems() == 0) {
+		// 1 volume selected
 		fVolMenu->ItemAt(0)->SetMarked(false);
 		PopUpMenuSetTitle(fVolMenu, lastSelectedVolumeItem->Label());
-	} else {
+	} else if (fDirectoryFilters.CountItems() > 1 || (!allVolumes && selectedVolumesCount > 1)) {
+		// multiple selections
 		fVolMenu->ItemAt(0)->SetMarked(false);
-		PopUpMenuSetTitle(fVolMenu, B_TRANSLATE_COMMENT(kMultipleSelections, kMultiSelectComment));
+		int32 selectedCount = selectedVolumesCount + fDirectoryFilters.CountItems();
+		PopUpMenuSetTitle(fVolMenu, MultipleSelectionsTitle(selectedCount));
+	} else {
+		// All disks (no selection or all volumes selected)
+		fVolMenu->ItemAt(0)->SetMarked(true);
+		PopUpMenuSetTitle(fVolMenu, fVolMenu->ItemAt(0)->Label());
 	}
+}
+
+
+BString
+FindPanel::MultipleSelectionsTitle(int32 count)
+{
+	static BStringFormat format(B_TRANSLATE_COMMENT(
+		"{0, plural, one{# selected} other{# selected}}",
+		"\"1 selected (singular)\" or \"2 selected (plural)\""));
+	BString selected;
+	format.Format(selected, count);
+
+	return selected;
 }
 
 
@@ -1697,10 +1590,8 @@ FindPanel::Draw(BRect)
 void
 FindPanel::UnmarkDisks()
 {
-	int32 startingIndex = 2;
-	int32 endingIndex = 2 + GetNumberOfVolumes();
-	for (int32 i = startingIndex; i < endingIndex; ++i)
-		fVolMenu->ItemAt(i)->SetMarked(false);
+	for (int32 i = 0; i < fVolumeItemsCount; ++i)
+		fVolMenu->ItemAt(fFirstVolumeItem + i)->SetMarked(false);
 
 	fVolMenu->ItemAt(0)->SetMarked(false);
 }
@@ -1765,7 +1656,7 @@ FindPanel::MessageReceived(BMessage* message)
 			}
 
 			int32 count = fVolMenu->CountItems();
-			int32 startingIndex = 3 + GetNumberOfVolumes();
+			int32 startingIndex = 3 + fVolumeItemsCount;
 			int32 endingIndex = count - 2;
 			for (int32 i = startingIndex; i < endingIndex; ++i) {
 				BMenuItem* menuItem = fVolMenu->ItemAt(i);
@@ -1773,6 +1664,7 @@ FindPanel::MessageReceived(BMessage* message)
 				entry_ref ref;
 				if (!message || message->FindRef("refs", &ref) != B_OK)
 					continue;
+
 				RemoveDirectoryFilter(&ref);
 				menuItem->SetMarked(false);
 			}
@@ -2438,8 +2330,8 @@ FindPanel::SetCurrentMimeType(const char* label)
 }
 
 
-static
-void AddSubtype(BString& text, const BMimeType& type)
+static void
+AddSubtype(BString& text, const BMimeType& type)
 {
 	text.Append(" (");
 	text.Append(strchr(type.Type(), '/') + 1);
@@ -2504,11 +2396,11 @@ FindPanel::AddMimeTypesToMenu()
 	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
 	ASSERT(tracker != NULL);
 
-	BList list;
+	BStringList list;
 	if (tracker != NULL && gMostUsedMimeTypes.ObtainList(&list)) {
 		int32 count = 0;
-		for (int32 index = 0; index < list.CountItems(); index++) {
-			const char* name = (const char*)list.ItemAt(index);
+		for (int32 index = 0; index < list.CountStrings(); index++) {
+			BString name = list.StringAt(index);
 
 			MimeTypeList* mimeTypes = tracker->MimeTypes();
 			if (mimeTypes != NULL) {
@@ -2573,15 +2465,18 @@ FindPanel::AddMimeTypesToMenu()
 
 
 void
-FindPanel::AddVolumes(BMenu* menu)
+FindPanel::AddVolumes()
 {
 	// ToDo: add calls to this to rebuild the menu when a volume gets mounted
 
 	BMessage* message = new BMessage(kVolumeItem);
 	message->AddInt32("device", -1);
-	menu->AddItem(new BMenuItem(B_TRANSLATE("All disks"), message));
-	menu->AddSeparatorItem();
-	PopUpMenuSetTitle(menu, B_TRANSLATE("All disks"));
+	fVolMenu->AddItem(new BMenuItem(B_TRANSLATE("All disks"), message));
+	fVolMenu->AddSeparatorItem();
+	PopUpMenuSetTitle(fVolMenu, B_TRANSLATE("All disks"));
+
+	fFirstVolumeItem = fVolMenu->CountItems();
+	fVolumeItemsCount = 0;
 
 	BVolumeRoster roster;
 	BVolume volume;
@@ -2601,14 +2496,26 @@ FindPanel::AddVolumes(BMenu* menu)
 
 			message = new BMessage(kVolumeItem);
 			message->AddInt32("device", volume.Device());
-			menu->AddItem(new ModelMenuItem(&model, model.Name(), message));
+			fVolMenu->AddItem(new ModelMenuItem(&model, model.Name(), message));
+			fVolumeItemsCount++;
 		}
 	}
 
-	if (menu->ItemAt(0))
-		menu->ItemAt(0)->SetMarked(true);
+	if (fVolMenu->ItemAt(0))
+		fVolMenu->ItemAt(0)->SetMarked(true);
 
-	menu->SetTargetForItems(this);
+	fVolMenu->SetTargetForItems(this);
+}
+
+
+BPopUpMenu*
+FindPanel::VolMenu(int32* firstVolumeItem, int32* volumeItemsCount) const
+{
+	if (firstVolumeItem != NULL)
+		*firstVolumeItem = fFirstVolumeItem;
+	if (volumeItemsCount != NULL)
+		*volumeItemsCount = fVolumeItemsCount;
+	return fVolMenu;
 }
 
 
@@ -2647,9 +2554,9 @@ AddOneRecentItem(const entry_ref* ref, void* castToParams)
 	return NULL;
 }
 
-// Helper Function To Catch Entries caused from duplicate files received through BQuery
-bool
-CheckForDuplicates(BObjectList<EntryWithDate>* list, EntryWithDate* entry)
+
+static bool
+CheckForDuplicates(BObjectList<EntryWithDate, true>* list, EntryWithDate* entry)
 {
 	// params checking
 	if (list == NULL || entry == NULL)
@@ -2669,19 +2576,18 @@ CheckForDuplicates(BObjectList<EntryWithDate>* list, EntryWithDate* entry)
 
 
 void
-FindPanel::AddRecentQueries(BMenu* menu, bool addSaveAsItem, const BMessenger* target, uint32 what,
-	bool includeTemplates, bool includeTemporaryQueries, bool includePersistedQueries)
+FindPanel::AddRecentQueries(BMenu* menu, bool addSaveAsItem, const BMessenger* target,
+	uint32 what, bool includeTemplates)
 {
-	BObjectList<entry_ref> templates(10, true);
-	BObjectList<EntryWithDate> recentQueries(10, true);
+	BObjectList<entry_ref, true> templates(10);
+	BObjectList<EntryWithDate, true> recentQueries(10);
 
 	// find all the queries on all volumes
 	BVolumeRoster roster;
 	BVolume volume;
 	roster.Rewind();
 	while (roster.GetNextVolume(&volume) == B_OK) {
-		if (volume.IsPersistent() && volume.KnowsQuery()
-			&& volume.KnowsAttr()) {
+		if (volume.IsPersistent() && volume.KnowsQuery() && volume.KnowsAttr()) {
 			BQuery query;
 			query.SetVolume(&volume);
 			query.SetPredicate("_trk/recentQuery == 1");
@@ -2702,56 +2608,14 @@ FindPanel::AddRecentQueries(BMenu* menu, bool addSaveAsItem, const BMessenger* t
 				if (strcasecmp(type, B_QUERY_TEMPLATE_MIMETYPE) == 0 && includeTemplates) {
 					templates.AddItem(new entry_ref(ref));
 				} else if (strcasecmp(type, B_QUERY_MIMETYPE) == 0) {
-					bool isTemporary = true;
-					node.ReadAttr("_trk/temporary", B_BOOL_TYPE, 0, &isTemporary, sizeof(bool));
-
-					struct attr_info info;
-					if (node.GetAttrInfo(kAttrQueryLastChange, &info) != B_OK)
-						continue;
-
-					if (info.type == B_MESSAGE_TYPE) {
-						BString bufferString;
-						char* buffer = bufferString.LockBuffer(info.size);
-						BMessage message;
-						if (node.ReadAttr(kAttrQueryLastChange, B_MESSAGE_TYPE, 0, buffer,
-								static_cast<size_t>(info.size))
-							!= info.size || message.Unflatten(buffer) != B_OK)
-							continue;
-						bufferString.UnlockBuffer();
-
-						int32 count;
-						if (message.GetInfo(kAttrQueryLastChange, NULL, &count) != B_OK)
-							continue;
-
-						for (int32 i = 0; i < count; i++) {
-							int32 time;
-							if (message.FindInt32(kAttrQueryLastChange, i, &time)
-								== B_OK) {
-								EntryWithDate* item = new EntryWithDate(ref, time);
-								if (((isTemporary && includeTemporaryQueries)
-										|| (!isTemporary
-											&& includePersistedQueries))
-									&& !CheckForDuplicates(&recentQueries, item)) {
-									recentQueries.AddItem(item);
-								} else {
-									delete item;
-								}
-							}
-						}
-					}
-					if (info.type == B_INT32_TYPE) {
-						int32 changeTime;
-						if (node.ReadAttr(kAttrQueryLastChange, B_INT32_TYPE, 0, &changeTime,
-								sizeof(int32))
-							== sizeof(int32)) {
-							EntryWithDate* item = new EntryWithDate(ref, changeTime);
-							if (((isTemporary && includeTemporaryQueries)
-									|| (!isTemporary && includePersistedQueries))
-								&& !CheckForDuplicates(&recentQueries, item)) {
-								recentQueries.AddItem(item);
-							} else {
-								delete item;
-							}
+					int32 changeTime;
+					if (node.ReadAttr(kAttrQueryLastChange, B_INT32_TYPE, 0, &changeTime,
+							sizeof(int32)) == sizeof(int32)) {
+						EntryWithDate* item = new EntryWithDate(ref, changeTime);
+						if (!CheckForDuplicates(&recentQueries, item)) {
+							recentQueries.AddItem(item);
+						} else {
+							delete item;
 						}
 					}
 				}
@@ -3140,9 +3004,9 @@ FindPanel::RestoreWindowState(const BNode* node)
 
 	LoadDirectoryFiltersFromFile(node);
 	// mark or unmark "All disks"
-	if (selectedVolumes == GetNumberOfVolumes()) {
+	if (selectedVolumes == fVolumeItemsCount) {
 		fVolMenu->ItemAt(0)->SetMarked(true);
-		for (int32 i = 0; i < GetNumberOfVolumes() + 2; ++i)
+		for (int32 i = 0; i < fVolumeItemsCount + 2; ++i)
 			fVolMenu->ItemAt(i)->SetMarked(false);
 	}
 	ShowVolumeMenuLabel();
@@ -3762,7 +3626,7 @@ DeleteTransientQueriesTask::Initialize()
 	PRINT(("starting up transient query killer\n"));
 	BPath path;
 	status_t result = find_directory(B_USER_DIRECTORY, &path, false);
-	if (result != B_OK) {
+	if (result != B_OK || path.Append("queries") != B_OK) {
 		state = kError;
 		return;
 	}
@@ -3770,8 +3634,6 @@ DeleteTransientQueriesTask::Initialize()
 	state = kAllocatedWalker;
 }
 
-
-const int32 kBatchCount = 100;
 
 bool
 DeleteTransientQueriesTask::GetSome()
@@ -3795,10 +3657,8 @@ DeleteTransientQueriesTask::GetSome()
 }
 
 
-const int32 kDaysToExpire = 7;
-
-static bool
-QueryOldEnough(Model* model)
+bool
+DeleteTransientQueriesTask::QueryOldEnough(Model* model)
 {
 	// check if it is old and ready to be deleted
 	time_t now = time(0);
@@ -3925,18 +3785,6 @@ TrackerBuildRecentFindItemsMenu(const char* title)
 
 //	#pragma mark -
 
-void
-DraggableQueryIcon::Draw(BRect updateRect)
-{
-	BRect rect(Bounds());
-	rgb_color base = ui_color(B_MENU_BACKGROUND_COLOR);
-	be_control_look->DrawBorder(this, rect, updateRect, base, B_PLAIN_BORDER, 0,
-		BControlLook::B_BOTTOM_BORDER);
-	be_control_look->DrawMenuBarBackground(this, rect, updateRect, base, 0,
-		BControlLook::B_ALL_BORDERS & ~BControlLook::B_LEFT_BORDER);
-	DraggableIcon::Draw(updateRect);
-}
-
 
 DraggableQueryIcon::DraggableQueryIcon(BRect frame, const char* name,
 	const BMessage* message, BMessenger messenger, uint32 resizeFlags,
@@ -3996,9 +3844,7 @@ MostUsedNames::~MostUsedNames()
 	BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
 	if (file.InitCheck() == B_OK) {
 		for (int32 i = 0; i < fList.CountItems(); i++) {
-			list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
-
-			char line[B_FILE_NAME_LENGTH + 5];
+			list_entry* entry = fList.ItemAt(i);
 
 			// limit upper bound to react more dynamically to changes
 			if (--entry->count > 20)
@@ -4009,8 +3855,9 @@ MostUsedNames::~MostUsedNames()
 			if (entry->count < -10 && i > 0)
 				continue;
 
-			sprintf(line, "%" B_PRId32 " %s\n", entry->count, entry->name);
-			if (file.Write(line, strlen(line)) < B_OK)
+			BString line;
+			line.SetToFormat("%" B_PRId32 " %s\n", entry->count, entry->name.String());
+			if (file.Write(line.String(), line.Length()) < B_OK)
 				break;
 		}
 	}
@@ -4019,15 +3866,14 @@ MostUsedNames::~MostUsedNames()
 	// free data
 
 	for (int32 i = fList.CountItems(); i-- > 0;) {
-		list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
-		free(entry->name);
+		list_entry* entry = fList.ItemAt(i);
 		delete entry;
 	}
 }
 
 
 bool
-MostUsedNames::ObtainList(BList* list)
+MostUsedNames::ObtainList(BStringList* list)
 {
 	if (list == NULL)
 		return false;
@@ -4039,11 +3885,11 @@ MostUsedNames::ObtainList(BList* list)
 
 	list->MakeEmpty();
 	for (int32 i = 0; i < fCount; i++) {
-		list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
+		list_entry* entry = fList.ItemAt(i);
 		if (entry == NULL)
 			return true;
 
-		list->AddItem(entry->name);
+		list->Add(entry->name);
 	}
 	return true;
 }
@@ -4057,7 +3903,7 @@ MostUsedNames::ReleaseList()
 
 
 void
-MostUsedNames::AddName(const char* name)
+MostUsedNames::AddName(const BString& name)
 {
 	fLock.Lock();
 
@@ -4070,12 +3916,10 @@ MostUsedNames::AddName(const char* name)
 	list_entry* entry = NULL;
 
 	if (fList.CountItems() > fCount * 2) {
-		entry = static_cast<list_entry*>(
-			fList.RemoveItem(fList.CountItems() - 1));
+		entry = fList.RemoveItemAt(fList.CountItems() - 1);
 
 		// is this the name we want to add here?
-		if (strcmp(name, entry->name)) {
-			free(entry->name);
+		if (name == entry->name) {
 			delete entry;
 			entry = NULL;
 		} else
@@ -4083,16 +3927,15 @@ MostUsedNames::AddName(const char* name)
 	}
 
 	if (entry == NULL) {
-		for (int32 i = 0;
-				(entry = static_cast<list_entry*>(fList.ItemAt(i))) != NULL; i++) {
-			if (strcmp(entry->name, name) == 0)
+		for (int32 i = 0; (entry = fList.ItemAt(i)) != NULL; i++) {
+			if (entry->name == name)
 				break;
 		}
 	}
 
 	if (entry == NULL) {
 		entry = new list_entry;
-		entry->name = strdup(name);
+		entry->name = name;
 		entry->count = 1;
 
 		fList.AddItem(entry);
@@ -4107,13 +3950,10 @@ MostUsedNames::AddName(const char* name)
 
 
 int
-MostUsedNames::CompareNames(const void* a,const void* b)
+MostUsedNames::CompareNames(const list_entry* entryA, const list_entry* entryB)
 {
-	list_entry* entryA = *(list_entry**)a;
-	list_entry* entryB = *(list_entry**)b;
-
 	if (entryA->count == entryB->count)
-		return strcasecmp(entryA->name,entryB->name);
+		return entryA->name.ICompare(entryB->name);
 
 	return entryB->count - entryA->count;
 }
@@ -4151,7 +3991,7 @@ MostUsedNames::LoadList()
 			continue;
 
 		list_entry* entry = new list_entry;
-		entry->name = strdup(name);
+		entry->name = name;
 		entry->count = count;
 
 		fList.AddItem(entry);

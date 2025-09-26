@@ -5,13 +5,14 @@ UsePrivateSystemHeaders ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) src bin multiuser ] ;
 
-Server launch_daemon
+Application launch_daemon
 	:
 	LaunchDaemon.cpp
 
 	BaseJob.cpp
 	Conditions.cpp
 	Events.cpp
+	FileWatcher.cpp
 	Job.cpp
 	Log.cpp
 	NetworkWatcher.cpp

@@ -422,6 +422,28 @@ private:
 #endif	// SLAB_MEMORY_MANAGER_TRACING
 
 
+// #pragma mark - utility methods
+
+
+template<typename Type>
+static inline Type*
+_pop(Type*& head)
+{
+	Type* oldHead = head;
+	head = head->next;
+	return oldHead;
+}
+
+
+template<typename Type>
+static inline void
+_push(Type*& head, Type* object)
+{
+	object->next = head;
+	head = object;
+}
+
+
 // #pragma mark - MemoryManager
 
 
@@ -1335,6 +1357,7 @@ MemoryManager::_AllocateArea(uint32 flags, Area*& _area)
 			(addr_t)area, (addr_t)areaBase + SLAB_AREA_SIZE - 1);
 
 		vmArea = VMAreas::Lookup(areaID);
+		vmArea->protection = B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA;
 		status_t error = _MapChunk(vmArea, (addr_t)area, kAreaAdminSize,
 			pagesNeededToMap, flags);
 		if (error != B_OK) {
@@ -1440,6 +1463,25 @@ MemoryManager::_FreeArea(Area* area, bool areaRemoved, uint32 flags)
 }
 
 
+/*static*/ inline void
+MemoryManager::_PushFreeArea(Area* area)
+{
+	_push(sFreeAreas, area);
+	sFreeAreaCount++;
+}
+
+
+/*static*/ inline MemoryManager::Area*
+MemoryManager::_PopFreeArea()
+{
+	if (sFreeAreaCount == 0)
+		return NULL;
+
+	sFreeAreaCount--;
+	return _pop(sFreeAreas);
+}
+
+
 /*static*/ status_t
 MemoryManager::_MapChunk(VMArea* vmArea, addr_t address, size_t size,
 	size_t reserveAdditionalMemory, uint32 flags)
@@ -1505,7 +1547,6 @@ MemoryManager::_MapChunk(VMArea* vmArea, addr_t address, size_t size,
 	cache->ReleaseRefAndUnlock();
 
 	vm_page_unreserve_pages(&reservation);
-
 	return B_OK;
 }
 
@@ -1533,6 +1574,7 @@ MemoryManager::_UnmapChunk(VMArea* vmArea, addr_t address, size_t size,
 	translationMap->Unlock();
 
 	// free the pages
+	vm_page_reservation reservation = {};
 	addr_t areaPageOffset = (address - vmArea->Base()) / B_PAGE_SIZE;
 	addr_t areaPageEndOffset = areaPageOffset + size / B_PAGE_SIZE;
 	VMCachePagesTree::Iterator it = cache->pages.GetIterator(
@@ -1547,13 +1589,13 @@ MemoryManager::_UnmapChunk(VMArea* vmArea, addr_t address, size_t size,
 
 		cache->RemovePage(page);
 			// the iterator is remove-safe
-		vm_page_free(cache, page);
+		vm_page_free_etc(cache, page, &reservation);
 	}
 
 	cache->ReleaseRefAndUnlock();
 
+	vm_page_unreserve_pages(&reservation);
 	vm_unreserve_memory(size);
-
 	return B_OK;
 }
 

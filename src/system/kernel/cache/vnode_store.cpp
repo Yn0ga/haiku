@@ -20,7 +20,7 @@
 status_t
 VMVnodeCache::Init(struct vnode* vnode, uint32 allocationFlags)
 {
-	status_t error = VMCache::Init(CACHE_TYPE_VNODE, allocationFlags);
+	status_t error = VMCache::Init("VMVnodeCache", CACHE_TYPE_VNODE, allocationFlags);
 	if (error != B_OK)
 		return error;
 
@@ -37,13 +37,17 @@ VMVnodeCache::Init(struct vnode* vnode, uint32 allocationFlags)
 status_t
 VMVnodeCache::Commit(off_t size, int priority)
 {
-	// We don't need to commit memory.
+	// We don't need to commit memory here.
+	// TODO: We do need to commit memory when pages are mapped, though,
+	// as mapped pages can't be stolen like CACHED ones can.
+	// (When the system is low on memory, the page daemon will unmap
+	// unused pages, and they can be decommitted then.)
 	return B_OK;
 }
 
 
 bool
-VMVnodeCache::HasPage(off_t offset)
+VMVnodeCache::StoreHasPage(off_t offset)
 {
 	return ROUNDUP(offset, B_PAGE_SIZE) >= virtual_base
 		&& offset < virtual_end;
@@ -110,7 +114,7 @@ VMVnodeCache::WriteAsync(off_t offset, const generic_io_vec* vecs, size_t count,
 status_t
 VMVnodeCache::Fault(struct VMAddressSpace* aspace, off_t offset)
 {
-	if (!HasPage(offset))
+	if (!StoreHasPage(offset))
 		return B_BAD_ADDRESS;
 
 	// vm_soft_fault() reads the page in.

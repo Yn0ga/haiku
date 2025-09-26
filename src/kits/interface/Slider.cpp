@@ -208,6 +208,7 @@ BSlider::~BSlider()
 #endif
 
 	delete fModificationMessage;
+	free(fUpdateText);
 	free(fMinLimitLabel);
 	free(fMaxLimitLabel);
 }
@@ -971,7 +972,8 @@ BSlider::DrawText()
 	BRect bounds(Bounds());
 	BView* view = OffscreenView();
 
-	rgb_color base = ViewColor();
+	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
+	rgb_color text = ui_color(B_PANEL_TEXT_COLOR);
 	uint32 flags = be_control_look->Flags(this);
 
 	font_height fontHeight;
@@ -979,25 +981,25 @@ BSlider::DrawText()
 	if (Orientation() == B_HORIZONTAL) {
 		if (Label() != NULL) {
 			be_control_look->DrawLabel(view, Label(), base, flags,
-				BPoint(0.0f, ceilf(fontHeight.ascent)));
+				BPoint(0.0f, ceilf(fontHeight.ascent)), &text);
 		}
 
 		// the update text is updated in SetValue() only
 		if (fUpdateText != NULL) {
 			be_control_look->DrawLabel(view, fUpdateText, base, flags,
 				BPoint(bounds.right - StringWidth(fUpdateText),
-					ceilf(fontHeight.ascent)));
+					ceilf(fontHeight.ascent)), &text);
 		}
 
 		if (fMinLimitLabel != NULL) {
 			be_control_look->DrawLabel(view, fMinLimitLabel, base, flags,
-				BPoint(0.0f, bounds.bottom - fontHeight.descent));
+				BPoint(0.0f, bounds.bottom - fontHeight.descent), &text);
 		}
 
 		if (fMaxLimitLabel != NULL) {
 			be_control_look->DrawLabel(view, fMaxLimitLabel, base, flags,
 				BPoint(bounds.right - StringWidth(fMaxLimitLabel),
-					bounds.bottom - fontHeight.descent));
+					bounds.bottom - fontHeight.descent), &text);
 		}
 	} else {
 		float lineHeight = ceilf(fontHeight.ascent) + ceilf(fontHeight.descent)
@@ -1007,14 +1009,14 @@ BSlider::DrawText()
 		if (Label() != NULL) {
 			be_control_look->DrawLabel(view, Label(), base, flags,
 				BPoint((bounds.Width() - StringWidth(Label())) / 2.0,
-					baseLine));
+					baseLine), &text);
 			baseLine += lineHeight;
 		}
 
 		if (fMaxLimitLabel != NULL) {
 			be_control_look->DrawLabel(view, fMaxLimitLabel, base, flags,
 				BPoint((bounds.Width() - StringWidth(fMaxLimitLabel)) / 2.0,
-					baseLine));
+					baseLine), &text);
 		}
 
 		baseLine = bounds.bottom - ceilf(fontHeight.descent);
@@ -1022,14 +1024,14 @@ BSlider::DrawText()
 		if (fMinLimitLabel != NULL) {
 			be_control_look->DrawLabel(view, fMinLimitLabel, base, flags,
 				BPoint((bounds.Width() - StringWidth(fMinLimitLabel)) / 2.0,
-					baseLine));
+					baseLine), &text);
 				baseLine -= lineHeight;
 		}
 
 		if (fUpdateText != NULL) {
 			be_control_look->DrawLabel(view, fUpdateText, base, flags,
 				BPoint((bounds.Width() - StringWidth(fUpdateText)) / 2.0,
-					baseLine));
+					baseLine), &text);
 		}
 	}
 }
@@ -1054,7 +1056,9 @@ BSlider::UpdateTextChanged()
 		oldWidth = StringWidth(fUpdateText);
 
 	const char* oldUpdateText = fUpdateText;
-	fUpdateText = UpdateText();
+	free(fUpdateText);
+
+	fUpdateText = strdup(UpdateText());
 	bool updateTextOnOff = (fUpdateText == NULL && oldUpdateText != NULL)
 		|| (fUpdateText != NULL && oldUpdateText == NULL);
 
@@ -1590,7 +1594,7 @@ BSlider::_DrawBlockThumb()
 	BRect frame = ThumbFrame();
 	BView* view = OffscreenView();
 
-	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
+	rgb_color base = ui_color(B_CONTROL_BACKGROUND_COLOR);
 	uint32 flags = be_control_look->Flags(this);
 	be_control_look->DrawSliderThumb(view, frame, frame, base, flags,
 		fOrientation);
@@ -1602,7 +1606,7 @@ BSlider::_DrawTriangleThumb()
 {
 	BRect frame = ThumbFrame();
 	BView* view = OffscreenView();
-	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
+	rgb_color base = ui_color(B_CONTROL_BACKGROUND_COLOR);
 	uint32 flags = be_control_look->Flags(this);
 	be_control_look->DrawSliderTriangle(view, frame, frame, base, flags,
 		fOrientation);

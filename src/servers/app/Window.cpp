@@ -112,6 +112,7 @@ Window::Window(const BRect& frame, const char *name,
 	fFeel(feel),
 	fWorkspaces(workspaces),
 	fCurrentWorkspace(-1),
+	fPriorWorkspace(-1),
 
 	fMinWidth(1),
 	fMaxWidth(32768),
@@ -1781,9 +1782,7 @@ Window::_TriggerContentRedraw(BRegion& dirty, const BRegion& expose)
 		if (fDrawingEngine->LockParallelAccess()) {
 			bool copyToFrontEnabled = fDrawingEngine->CopyToFrontEnabled();
 			fDrawingEngine->SetCopyToFrontEnabled(true);
-			fDrawingEngine->SuspendAutoSync();
 			fTopView->Draw(fDrawingEngine.Get(), &expose, &fContentRegion, true);
-			fDrawingEngine->Sync();
 			fDrawingEngine->SetCopyToFrontEnabled(copyToFrontEnabled);
 			fDrawingEngine->UnlockParallelAccess();
 		}
@@ -1959,11 +1958,8 @@ Window::BeginUpdate(BPrivate::PortLink& link)
 	fDrawingEngine->SetCopyToFrontEnabled(false);
 
 	if (fDrawingEngine->LockParallelAccess()) {
-		fDrawingEngine->SuspendAutoSync();
-
 		fTopView->Draw(GetDrawingEngine(), dirty, &fContentRegion, true);
 
-		fDrawingEngine->Sync();
 		fDrawingEngine->UnlockParallelAccess();
 	} // else the background was cleared already
 

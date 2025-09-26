@@ -18,6 +18,7 @@
 #include <InterfaceDefs.h>
 #include <Point.h>
 #include <Rect.h>
+#include <Region.h>
 
 
 class BAffineTransform;
@@ -37,8 +38,7 @@ struct picture_player_callbacks {
 	void (*draw_rect)(void* userData, const BRect& rect, bool fill);
 	void (*draw_round_rect)(void* userData, const BRect& rect,
 		const BPoint& radii, bool fill);
-	void (*draw_bezier)(void* userData, size_t numControlPoints,
-		const BPoint controlPoints[], bool fill);
+	void (*draw_bezier)(void* userData, const BPoint controlPoints[4], bool fill);
 	void (*draw_arc)(void* userData, const BPoint& center, const BPoint& radii,
 		float startTheta, float arcTheta, bool fill);
 	void (*draw_ellipse)(void* userData, const BRect& rect, bool fill);
@@ -53,7 +53,7 @@ struct picture_player_callbacks {
 		const void* data, size_t length);
 	void (*draw_picture)(void* userData, const BPoint& where, int32 token);
 	void (*set_clipping_rects)(void* userData, size_t numRects,
-		const BRect rects[]);
+		const clipping_rect rects[]);
 	void (*clip_to_picture)(void* userData, int32 token,
 		const BPoint& where, bool clipToInverse);
 	void (*push_state)(void* userData);
@@ -97,7 +97,7 @@ struct picture_player_callbacks {
 		size_t length, const BPoint locations[], size_t locationCount);
 	void (*draw_rect_gradient)(void* userData, const BRect& rect, BGradient& gradient, bool fill);
 	void (*draw_round_rect_gradient)(void* userData, const BRect& rect, const BPoint& radii, BGradient& gradient, bool fill);
-	void (*draw_bezier_gradient)(void* userData, size_t numControlPoints, const BPoint controlPoints[], BGradient& gradient, bool fill);
+	void (*draw_bezier_gradient)(void* userData, const BPoint controlPoints[4], BGradient& gradient, bool fill);
 	void (*draw_arc_gradient)(void* userData, const BPoint& center, const BPoint& radii, float startTheta, float arcTheta, BGradient& gradient, bool fill);
 	void (*draw_ellipse_gradient)(void* userData, const BRect& rect, BGradient& gradient, bool fill);
 	void (*draw_polygon_gradient)(void* userData, size_t numPoints, const BPoint points[], bool isClosed, BGradient& gradient, bool fill);

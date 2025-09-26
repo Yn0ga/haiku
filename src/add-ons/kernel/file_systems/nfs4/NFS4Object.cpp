@@ -184,6 +184,12 @@ NFS4Object::HandleErrors(uint32& attempt, uint32 nfs4Error, RPC::Server* server,
 			}
 			return false;
 
+		// delegation might have just been recalled, or is about to be recalled
+		case NFS4ERR_OPENMODE:
+			if (state->fDelegation != NULL)
+				return true;
+			return false;
+
 		default:
 			return false;
 	}
@@ -200,7 +206,7 @@ NFS4Object::ConfirmOpen(const FileHandle& fh, OpenState* state,
 	uint32 attempt = 0;
 	do {
 		RPC::Server* serv = fFileSystem->Server();
-		Request request(serv, fFileSystem);
+		Request request(serv, fFileSystem, geteuid(), getegid());
 
 		RequestBuilder& req = request.Builder();
 

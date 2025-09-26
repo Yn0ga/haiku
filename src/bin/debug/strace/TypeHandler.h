@@ -35,7 +35,7 @@ public:
 	virtual string GetReturnValue(Context &, uint64 value) = 0;
 };
 
-class EnumTypeHandler : public TypeHandler {
+class EnumTypeHandler : virtual public TypeHandler {
 public:
 	typedef std::map<int, const char *> EnumMap;
 
@@ -44,13 +44,13 @@ public:
 	string GetParameterValue(Context &c, Parameter *, const void *);
 	string GetReturnValue(Context &, uint64 value);
 
-	string RenderValue(Context &, unsigned int value) const;
+	virtual string RenderValue(Context &, unsigned int value) const;
 
-private:
+protected:
 	const EnumMap &fMap;
 };
 
-class FlagsTypeHandler : public TypeHandler {
+class FlagsTypeHandler : virtual public TypeHandler {
 public:
 	struct FlagInfo {
 		unsigned int value;
@@ -63,10 +63,20 @@ public:
 	string GetParameterValue(Context &c, Parameter *, const void *);
 	string GetReturnValue(Context &, uint64 value);
 
-	string RenderValue(Context &, unsigned int value) const;
+	virtual string RenderValue(Context &, unsigned int value) const;
 
 private:
 	const FlagsList &fList;
+};
+
+class EnumFlagsTypeHandler : public EnumTypeHandler {
+public:
+	EnumFlagsTypeHandler(const EnumMap &, const FlagsTypeHandler::FlagsList &);
+
+	string RenderValue(Context &, unsigned int value) const;
+
+private:
+	const FlagsTypeHandler::FlagsList &fList;
 };
 
 // currently limited to select ints
@@ -98,6 +108,7 @@ struct TypeHandlerFactory {
 extern TypeHandler *create_pointer_type_handler();
 extern TypeHandler *create_string_type_handler();
 extern TypeHandler *create_status_t_type_handler();
+extern TypeHandler *create_ssize_t_type_handler();
 
 // specialization for "const char*"
 template<>
@@ -140,6 +151,8 @@ struct pollfd;
 struct object_wait_info;
 struct event_wait_info;
 
+struct rlimit;
+
 DEFINE_FACTORY(flock_ptr, flock *);
 DEFINE_FACTORY(ifconf_ptr, ifconf *);
 DEFINE_FACTORY(ifreq_ptr, ifreq *);
@@ -153,6 +166,9 @@ DEFINE_FACTORY(sockaddr_ptr, const sockaddr *);
 DEFINE_FACTORY(sockaddr_args_ptr, sockaddr_args *);
 DEFINE_FACTORY(socket_args_ptr, socket_args *);
 DEFINE_FACTORY(sockopt_args_ptr, sockopt_args *);
+
+DEFINE_FACTORY(rlimit_ptr, rlimit *);
+DEFINE_FACTORY(rlimit_ptr, const rlimit *);
 
 DEFINE_FACTORY(fdset_ptr, fd_set *);
 DEFINE_FACTORY(pollfd_ptr, pollfd *);

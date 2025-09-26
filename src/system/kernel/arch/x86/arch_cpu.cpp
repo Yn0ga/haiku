@@ -500,6 +500,8 @@ dump_feature_string(int currentCPU, cpu_ent* cpu)
 		strlcat(features, "rdrnd ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_EXT] & IA32_FEATURE_EXT_HYPERVISOR)
 		strlcat(features, "hypervisor ", sizeof(features));
+	if (cpu->arch.feature[FEATURE_EXT_AMD_ECX] & IA32_FEATURE_AMD_EXT_MWAITX)
+		strlcat(features, "mwaitx ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_EXT_AMD] & IA32_FEATURE_AMD_EXT_SYSCALL)
 		strlcat(features, "syscall ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_EXT_AMD] & IA32_FEATURE_AMD_EXT_NX)
@@ -624,6 +626,8 @@ dump_feature_string(int currentCPU, cpu_ent* cpu)
 		strlcat(features, "pku ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_7_ECX] & IA32_FEATURE_OSPKE)
 		strlcat(features, "ospke ", sizeof(features));
+	if (cpu->arch.feature[FEATURE_7_ECX] & IA32_FEATURE_WAITPKG)
+		strlcat(features, "waitpkg ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_7_ECX] & IA32_FEATURE_AVX512VMBI2)
 		strlcat(features, "avx512vmbi2 ", sizeof(features));
 	if (cpu->arch.feature[FEATURE_7_ECX] & IA32_FEATURE_GFNI)
@@ -1445,11 +1449,6 @@ detect_cpu(int currentCPU, bool full = true)
 			cpu->arch.feature[FEATURE_EXT_AMD] &= IA32_FEATURES_INTEL_EXT;
 	}
 
-	if (maxBasicLeaf >= 5) {
-		get_current_cpuid(&cpuid, 5, 0);
-		cpu->arch.feature[FEATURE_5_ECX] = cpuid.regs.ecx;
-	}
-
 	if (maxBasicLeaf >= 6) {
 		get_current_cpuid(&cpuid, 6, 0);
 		cpu->arch.feature[FEATURE_6_EAX] = cpuid.regs.eax;
@@ -1531,14 +1530,17 @@ x86_get_double_fault_stack(int32 cpu, size_t* _size)
 }
 
 
-/*!	Returns the index of the current CPU. Can only be called from the double
-	fault handler.
+/*!	If on a double fault stack, returns the index of the current CPU.
+	Otherwise, returns -1.
 */
 int32
-x86_double_fault_get_cpu(void)
+x86_double_fault_get_cpu()
 {
 	addr_t stack = x86_get_stack_frame();
-	return (stack - sDoubleFaultStacks) / kDoubleFaultStackSize;
+	int32 cpu = (stack - sDoubleFaultStacks) / kDoubleFaultStackSize;
+	if (cpu < 0 || cpu >= smp_get_num_cpus())
+		return -1;
+	return cpu;
 }
 
 
@@ -1607,12 +1609,21 @@ detect_amdc1e_noarat()
 	if (cpu->arch.vendor != VENDOR_AMD)
 		return false;
 
-	// Family 0x12 and higher processors support ARAT
-	// Family lower than 0xf processors doesn't support C1E
-	// Family 0xf with model <= 0x40 procssors doesn't support C1E
+	if (cpu->arch.feature[FEATURE_6_EAX] & IA32_FEATURE_ARAT)
+		return false;
+
 	uint32 family = cpu->arch.family + cpu->arch.extended_family;
 	uint32 model = (cpu->arch.extended_model << 4) | cpu->arch.model;
-	return (family < 0x12 && family > 0xf) || (family == 0xf && model > 0x40);
+	if (family >= 0x12) {
+		// Family 0x12 and higher processors support ARAT correctly,
+		// but they don't declare it in the CPUID until 0x17 (Zen).
+		cpu->arch.feature[FEATURE_6_EAX] |= IA32_FEATURE_ARAT;
+		return false;
+	}
+
+	// Family lower than 0xf processors doesn't support C1E
+	// Family 0xf with model <= 0x40 processors doesn't support C1E
+	return (family > 0xf) || (family == 0xf && model > 0x40);
 }
 
 
@@ -1627,23 +1638,23 @@ init_tsc_with_cpuid(kernel_args* args, uint32* conversionFactor)
 	cpuid_info cpuid;
 	get_current_cpuid(&cpuid, 0, 0);
 	uint32 maxBasicLeaf = cpuid.eax_0.max_eax;
-	if (maxBasicLeaf < 0x15)
+	if (maxBasicLeaf < IA32_CPUID_LEAF_TSC)
 		return;
 
-	get_current_cpuid(&cpuid, 0x15, 0);
+	get_current_cpuid(&cpuid, IA32_CPUID_LEAF_TSC, 0);
 	if (cpuid.regs.eax == 0 || cpuid.regs.ebx == 0)
 		return;
 	uint32 khz = cpuid.regs.ecx / 1000;
 	uint32 denominator = cpuid.regs.eax;
 	uint32 numerator = cpuid.regs.ebx;
 	if (khz == 0 && model == 0x5f) {
-		// CPUID 0x16 isn't supported, hardcoding
+		// CPUID_LEAF_FREQUENCY isn't supported, hardcoding
 		khz = 25000;
 	}
 
-	if (khz == 0 && maxBasicLeaf >= 0x16) {
+	if (khz == 0 && maxBasicLeaf >= IA32_CPUID_LEAF_FREQUENCY) {
 		// for these CPUs the base frequency is also the tsc frequency
-		get_current_cpuid(&cpuid, 0x16, 0);
+		get_current_cpuid(&cpuid, IA32_CPUID_LEAF_FREQUENCY, 0);
 		khz = cpuid.regs.eax * 1000 * denominator / numerator;
 	}
 	if (khz == 0)
@@ -1734,10 +1745,9 @@ arch_cpu_init_percpu(kernel_args* args, int cpu)
 	load_microcode(cpu);
 	detect_cpu(cpu);
 
-	if (cpu == 0)
+	if (cpu == 0) {
 		init_tsc(args);
 
-	if (!gCpuIdleFunc) {
 		if (detect_amdc1e_noarat())
 			gCpuIdleFunc = amdc1e_noarat_idle;
 		else
@@ -1908,12 +1918,12 @@ arch_cpu_init_post_vm(kernel_args* args)
 		call_all_cpus_sync(&enable_osxsave, NULL);
 		gXsaveMask = IA32_XCR0_X87 | IA32_XCR0_SSE;
 		cpuid_info cpuid;
-		get_current_cpuid(&cpuid, 0xd, 0);
+		get_current_cpuid(&cpuid, IA32_CPUID_LEAF_XSTATE, 0);
 		gXsaveMask |= (cpuid.regs.eax & IA32_XCR0_AVX);
 		call_all_cpus_sync(&enable_xsavemask, NULL);
-		get_current_cpuid(&cpuid, 0xd, 0);
+		get_current_cpuid(&cpuid, IA32_CPUID_LEAF_XSTATE, 0);
 		gFPUSaveLength = cpuid.regs.ebx;
-		if (gFPUSaveLength > sizeof(((struct arch_thread *)0)->fpu_state))
+		if (gFPUSaveLength > sizeof(((struct arch_thread *)0)->user_fpu_state))
 			gFPUSaveLength = 832;
 
 		arch_altcodepatch_replace(ALTCODEPATCH_TAG_XSAVE,

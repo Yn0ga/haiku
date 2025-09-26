@@ -255,14 +255,14 @@ overlay_deselect(fs_volume *volume, fs_vnode *vnode, void *cookie, uint8 event,
 
 
 static status_t
-overlay_fsync(fs_volume *volume, fs_vnode *vnode)
+overlay_fsync(fs_volume *volume, fs_vnode *vnode, bool dataOnly)
 {
 	DO_LOG("%s\n", "fsync");
 
 	status_t result = B_UNSUPPORTED;
 	fs_vnode *superVnode = (fs_vnode *)vnode->private_node;
 	if (superVnode->ops->fsync != NULL)
-		result = superVnode->ops->fsync(volume->super_volume, superVnode);
+		result = superVnode->ops->fsync(volume->super_volume, superVnode, dataOnly);
 
 	DO_LOG("fsync result: %#" B_PRIx32 "\n", result);
 	return result;
@@ -1106,6 +1106,9 @@ static status_t
 overlay_mount(fs_volume *volume, const char *device, uint32 flags,
 	const char *args, ino_t *rootID)
 {
+	if (volume->super_volume == NULL)
+		return B_UNSUPPORTED;
+
 	char filename[256];
 	snprintf(filename, sizeof(filename), "%s%s", kLogFilePrefix, device);
 	filename[sizeof(filename) - 1] = 0;

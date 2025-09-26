@@ -1,4 +1,4 @@
-1	hungarian	x-vnd.Haiku-MediaPlayer	390961765
+1	hungarian	x-vnd.Haiku-MediaPlayer	520971408
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Bejegyzés Szemetesbe helyezése
 Close	MediaPlayer-PlaylistWindow		Bezárás
 Volume of background clips	MediaPlayer-SettingsWindow		Háttérbeli klippek hangereje
@@ -24,7 +24,6 @@ Resume:	MediaPlayer-SettingsWindow		Folytatás:
 Duration	MediaPlayer-InfoWin		Időtartam
 Import Entries	MediaPlayer-ImportPLItemsCmd		Bejegyzések importálása
 Open network stream	MediaPlayer-Main		Hálózati műsor megnyitása
-Move file to Trash	MediaPlayer-PlaylistWindow		Fájl Szemetesbe helyezése
 Open file…	MediaPlayer-Main		Fájl megnyitása…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Nagyított vezérlők teljes képernyős módban
 View options	MediaPlayer-SettingsWindow		Megjelenítési beállítások
@@ -58,6 +57,7 @@ Video track	MediaPlayer-Main		Videósáv
 Playlist…	MediaPlayer-Main		Lejátszási lista…
 <unnamed media>	MediaPlayer-InfoWin		<névtelen>
 Save	MediaPlayer-PlaylistWindow		Mentés
+25% scale	MediaPlayer-Main		25% méret
 Randomize Entries	MediaPlayer-RandomizePLItemsCmd		Bejegyzések véletlenszerűsítése
 Cancel	MediaPlayer-NetworkStream		Mégse
 Nothing to Play	MediaPlayer-Main		Nincs mit lejátszani

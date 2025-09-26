@@ -15,6 +15,7 @@
 #include <util/DoublyLinkedList.h>
 #include <vm/vm.h>
 #include <vm/vm_types.h>
+#include <vm/VMArea.h>
 
 #include "kernel_debug_config.h"
 
@@ -24,7 +25,7 @@ struct ObjectCache;
 
 
 enum {
-	CACHE_TYPE_RAM = 0,
+	CACHE_TYPE_RAM = 1,
 	CACHE_TYPE_VNODE,
 	CACHE_TYPE_DEVICE,
 	CACHE_TYPE_NULL
@@ -80,7 +81,8 @@ public:
 								VMCache();
 	virtual						~VMCache();
 
-			status_t			Init(uint32 cacheType, uint32 allocationFlags);
+			status_t			Init(const char* name, uint32 cacheType,
+									uint32 allocationFlags);
 
 	virtual	void				Delete();
 
@@ -135,7 +137,7 @@ public:
 	virtual	status_t			Adopt(VMCache* source, off_t offset, off_t size,
 									off_t newOffset);
 
-	virtual	status_t			Discard(off_t offset, off_t size);
+	virtual	ssize_t				Discard(off_t offset, off_t size);
 
 			status_t			FlushAndRemoveAllPages();
 
@@ -149,8 +151,9 @@ public:
 									{ return fRefCount; }
 
 	// backing store operations
+	virtual	bool				CanOvercommit();
 	virtual	status_t			Commit(off_t size, int priority);
-	virtual	bool				HasPage(off_t offset);
+	virtual	bool				StoreHasPage(off_t offset);
 
 	virtual	status_t			Read(off_t offset, const generic_io_vec *vecs,
 									size_t count, uint32 flags,
@@ -172,13 +175,23 @@ public:
 	virtual	status_t			Fault(struct VMAddressSpace *aspace,
 									off_t offset);
 
+	inline	uint64				FaultCount() const
+									{ return fFaultCount; }
+	inline	void				IncrementFaultCount()
+									{ fFaultCount++; }
+
+	inline	uint64				CopiedPagesCount() const
+									{ return fCopiedPagesCount; }
+	inline	void				IncrementCopiedPagesCount()
+									{ fCopiedPagesCount++; }
+
 	virtual	void				Merge(VMCache* source);
 
 	virtual	status_t			AcquireUnreferencedStoreRef();
 	virtual	void				AcquireStoreRef();
 	virtual	void				ReleaseStoreRef();
 
-	virtual	bool				DebugHasPage(off_t offset);
+	virtual	bool				DebugStoreHasPage(off_t offset);
 			vm_page*			DebugLookupPage(off_t offset);
 
 	virtual	void				Dump(bool showPages) const;
@@ -187,7 +200,7 @@ protected:
 	virtual	void				DeleteObject() = 0;
 
 public:
-			VMArea*				areas;
+			VMArea::CacheList	areas;
 			ConsumerList		consumers;
 				// list of caches that use this cache as a source
 			VMCachePagesTree	pages;
@@ -198,7 +211,6 @@ public:
 				// TODO: Remove!
 			uint32				page_count;
 			uint32				temporary : 1;
-			uint32				unmergeable : 1;
 			uint32				type : 6;
 
 #if DEBUG_CACHE_LIST
@@ -219,7 +231,7 @@ private:
 			void				_RemoveConsumer(VMCache* consumer);
 
 			bool				_FreePageRange(VMCachePagesTree::Iterator it,
-									page_num_t* toPage);
+									page_num_t* toPage, page_num_t* freedPages);
 
 private:
 			int32				fRefCount;
@@ -227,7 +239,10 @@ private:
 			PageEventWaiter*	fPageEventWaiters;
 			void*				fUserData;
 			VMCacheRef*			fCacheRef;
+
 			page_num_t			fWiredPagesCount;
+			uint64				fFaultCount;
+			uint64				fCopiedPagesCount;
 };
 
 

@@ -1,69 +1,247 @@
 /*
- * Copyright 2022, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2024-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 #include "PackageUtils.h"
 
+#include "Logger.h"
 
-using namespace BPackageKit;
+/*!	This method will obtain the title from the package if this is possible or
+	otherwise it will return the name of the package.
+*/
 
-
-/*static*/
-status_t PackageUtils::DeriveLocalFilePath(const PackageInfo* package,
-	BPath& path)
+/*static*/ void
+PackageUtils::TitleOrName(const PackageInfoRef& package, BString& title)
 {
-	if (package->IsLocalFile()) {
-		path.SetTo(package->LocalFilePath());
-		return B_OK;
-	}
-
-	path.Unset();
-	BPackageInstallationLocation installationLocation
-		= DeriveInstallLocation(package);
-	directory_which which;
-	status_t result = _DeriveDirectoryWhich(installationLocation, &which);
-
-	if (result == B_OK)
-		result = find_directory(which, &path);
-
-	if (result == B_OK)
-		path.Append(package->FileName());
-
-	return result;
+	PackageUtils::Title(package, title);
+	if (title.IsEmpty() && package.IsSet())
+		title.SetTo(package->Name());
 }
 
 
-/*static*/ status_t
-PackageUtils::_DeriveDirectoryWhich(
-	BPackageInstallationLocation location,
-	directory_which* which)
+/*static*/ void
+PackageUtils::Title(const PackageInfoRef& package, BString& title)
 {
-	switch (location) {
-		case B_PACKAGE_INSTALLATION_LOCATION_SYSTEM:
-			*which = B_SYSTEM_PACKAGES_DIRECTORY;
-			break;
-		case B_PACKAGE_INSTALLATION_LOCATION_HOME:
-			*which = B_USER_PACKAGES_DIRECTORY;
-			break;
+	if (package.IsSet()) {
+		PackageLocalizedTextRef localizedText = package->LocalizedText();
+
+		if (localizedText.IsSet())
+			title.SetTo(localizedText->Title());
+		else
+			title.SetTo("");
+	} else {
+		title.SetTo("");
+	}
+}
+
+
+/*static*/ void
+PackageUtils::Summary(const PackageInfoRef& package, BString& summary)
+{
+	if (package.IsSet()) {
+		PackageLocalizedTextRef localizedText = package->LocalizedText();
+
+		if (localizedText.IsSet())
+			summary.SetTo(localizedText->Summary());
+		else
+			summary.SetTo("");
+	} else {
+		summary.SetTo("");
+	}
+}
+
+
+/*static*/ const BString
+PackageUtils::DepotName(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageCoreInfoRef coreInfo = package->CoreInfo();
+
+		if (coreInfo.IsSet())
+			return coreInfo->DepotName();
+	}
+
+	return BString();
+}
+
+
+/*static*/ PackageVersionRef
+PackageUtils::Version(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageCoreInfoRef coreInfo = package->CoreInfo();
+
+		if (coreInfo.IsSet())
+			return coreInfo->Version();
+	}
+
+	return PackageVersionRef();
+}
+
+
+/*static*/ const BString
+PackageUtils::Architecture(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageCoreInfoRef coreInfo = package->CoreInfo();
+
+		if (coreInfo.IsSet())
+			return coreInfo->Architecture();
+	}
+
+	return "";
+}
+
+
+/*static*/ const BString
+PackageUtils::PublisherName(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageCoreInfoRef coreInfo = package->CoreInfo();
+
+		if (coreInfo.IsSet()) {
+			PackagePublisherInfoRef publisherInfo = coreInfo->Publisher();
+
+			if (publisherInfo.IsSet())
+				return publisherInfo->Name();
+		}
+	}
+
+	return "";
+}
+
+
+/*static*/ bool
+PackageUtils::IsProminent(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageClassificationInfoRef classificationInfo = package->PackageClassificationInfo();
+
+		if (classificationInfo.IsSet())
+			return classificationInfo->IsProminent();
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
+PackageUtils::IsNativeDesktop(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageClassificationInfoRef classificationInfo = package->PackageClassificationInfo();
+
+		if (classificationInfo.IsSet())
+			return classificationInfo->IsNativeDesktop();
+	}
+
+	return false;
+}
+
+
+/*static*/ PackageState
+PackageUtils::State(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->State();
+	}
+
+	return NONE;
+}
+
+
+/*static*/ off_t
+PackageUtils::Size(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->Size();
+	}
+
+	return 0;
+}
+
+
+/*static*/ bool
+PackageUtils::Viewed(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->Viewed();
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
+PackageUtils::IsActivatedOrLocalFile(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->IsLocalFile() || localInfo->State() == ACTIVATED;
+	}
+
+	return false;
+}
+
+
+/*static*/ float
+PackageUtils::DownloadProgress(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->DownloadProgress();
+	}
+
+	return 0.0f;
+}
+
+
+/*static*/ int32
+PackageUtils::Flags(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalInfoRef localInfo = package->LocalInfo();
+
+		if (localInfo.IsSet())
+			return localInfo->Flags();
+	}
+
+	return false;
+}
+
+
+/*static*/ const char*
+PackageUtils::StateToString(PackageState state)
+{
+	switch (state) {
+		case NONE:
+			return "NONE";
+		case INSTALLED:
+			return "INSTALLED";
+		case DOWNLOADING:
+			return "DOWNLOADING";
+		case ACTIVATED:
+			return "ACTIVATED";
+		case UNINSTALLED:
+			return "UNINSTALLED";
+		case PENDING:
+			return "PENDING";
 		default:
-			debugger("illegal state: unsupported package installation"
-				"location");
-			return B_BAD_VALUE;
+			debugger("unknown package state");
+			return "???";
 	}
-	return B_OK;
-}
-
-
-/*static*/ BPackageInstallationLocation
-PackageUtils::DeriveInstallLocation(const PackageInfo* package)
-{
-	const PackageInstallationLocationSet& locations
-		= package->InstallationLocations();
-
-	// If the package is already installed, return its first installed location
-	if (locations.size() != 0)
-		return static_cast<BPackageInstallationLocation>(*locations.begin());
-
-	return B_PACKAGE_INSTALLATION_LOCATION_SYSTEM;
 }

@@ -236,15 +236,18 @@ patch_syscalls()
 	extern void patch_ioctl();
 	extern void patch_mutex();
 	extern void patch_network();
+	extern void patch_rlimit();
 
 	for (size_t i = 0; i < sSyscallVector.size(); i++) {
 		Syscall *syscall = sSyscallVector[i];
 
 		// patch return type handlers
 		const string returnTypeName = syscall->ReturnType()->TypeName();
-		if (returnTypeName == "status_t" || returnTypeName == "ssize_t"
-				|| returnTypeName == "int") {
+		if (returnTypeName == "int" || returnTypeName == "status_t"
+				|| returnTypeName == "area_id") {
 			syscall->ReturnType()->SetHandler(create_status_t_type_handler());
+		} else if (returnTypeName == "ssize_t") {
+			syscall->ReturnType()->SetHandler(create_ssize_t_type_handler());
 		}
 	}
 
@@ -255,6 +258,7 @@ patch_syscalls()
 	patch_ioctl();
 	patch_mutex();
 	patch_network();
+	patch_rlimit();
 }
 
 

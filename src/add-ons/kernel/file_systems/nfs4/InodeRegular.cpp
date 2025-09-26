@@ -40,6 +40,8 @@ Inode::CreateState(const char* name, int mode, int perms, OpenState* state,
 	fileInfo.fFileId = fileID;
 	fileInfo.fHandle = handle;
 
+	fFileSystem->EnsureNoCollision(FileIdToInoT(fileID), handle);
+
 	fFileSystem->InoIdMap()->AddName(fileInfo, fInfo.fNames, name,
 		FileIdToInoT(fileID));
 
@@ -113,6 +115,7 @@ Inode::Open(int mode, OpenFileCookie* cookie)
 		state->fInfo = fInfo;
 		state->fFileSystem = fFileSystem;
 		state->fMode = mode & O_RWMASK;
+		state->fDelegation = fDelegation;
 		status_t result = OpenFile(state, mode, &data);
 		if (result != B_OK) {
 			delete state;
@@ -123,8 +126,8 @@ Inode::Open(int mode, OpenFileCookie* cookie)
 		fOpenState = state;
 		cookie->fOpenState = state;
 		locker.Unlock();
-
-		RevalidateFileCache();
+		if (fDelegation == NULL)
+			RevalidateFileCache();
 	} else {
 		fOpenState->AcquireReference();
 		cookie->fOpenState = fOpenState;
@@ -136,7 +139,7 @@ Inode::Open(int mode, OpenFileCookie* cookie)
 			if (oldMode == O_RDONLY)
 				RecallReadDelegation();
 
-			status_t result = OpenFile(fOpenState, O_RDWR, &data);
+			status_t result = OpenFile(fOpenState, newMode, &data);
 			if (result != B_OK) {
 				locker.Lock();
 				ReleaseOpenState();
@@ -195,7 +198,7 @@ Inode::Close(OpenFileCookie* cookie)
 
 	int mode = cookie->fMode & O_RWMASK;
 	if (mode == O_RDWR || mode == O_WRONLY)
-		SyncAndCommit();
+		SyncAndCommit(false, cookie);
 
 	MutexLocker _(fStateLock);
 	ReleaseOpenState();
@@ -321,6 +324,8 @@ Inode::ReadDirect(OpenStateCookie* cookie, off_t pos, void* buffer,
 
 	status_t result;
 	OpenState* state = cookie != NULL ? cookie->fOpenState : fOpenState;
+	ReadLocker delegationLocker(fDelegationLock);
+	ASSERT(state->fDelegation == fDelegation);
 	while (size < *_length && !*eof) {
 		uint32 len = *_length - size;
 		result = ReadFile(cookie, state, pos + size, &len,
@@ -351,6 +356,8 @@ Inode::Read(OpenFileCookie* cookie, off_t pos, void* buffer, size_t* _length)
 	bool eof = false;
 	if ((cookie->fMode & O_NOCACHE) != 0)
 		return ReadDirect(cookie, pos, buffer, _length, &eof);
+
+	MutexLocker _(fFileCacheLock);
 	return file_cache_read(fFileCache, cookie, pos, buffer, _length);
 }
 
@@ -359,7 +366,7 @@ status_t
 Inode::WriteDirect(OpenStateCookie* cookie, off_t pos, const void* _buffer,
 	size_t* _length)
 {
-	ASSERT(cookie != NULL || fOpenState != NULL);
+	ASSERT_WITH_DUMP(cookie != NULL || fOpenState != NULL, this);
 	ASSERT(_buffer != NULL);
 	ASSERT(_length != NULL);
 
@@ -381,6 +388,8 @@ Inode::WriteDirect(OpenStateCookie* cookie, off_t pos, const void* _buffer,
 		fWriteDirty = true;
 	}
 
+	ReadLocker delegationLocker(fDelegationLock);
+	ASSERT(state->fDelegation == fDelegation);
 	while (size < *_length) {
 		uint32 len = *_length - size;
 		status_t result = WriteFile(cookie, state, pos + size, &len,
@@ -426,13 +435,22 @@ Inode::Write(OpenFileCookie* cookie, off_t pos, const void* _buffer,
 		status_t result = file_cache_set_size(fFileCache, fileSize);
 		if (result != B_OK)
 			return result;
+		if (static_cast<uint64>(pos) > ROUNDUP(fMaxFileSize, B_PAGE_SIZE)
+			&& (cookie->fMode & O_NOCACHE) == 0) {
+			// Zero out the start of the file cache page where the write begins.
+			// We will let the server zero out the rest of the hole.
+			fMaxFileSize = pos;
+			size_t pageOffset = pos % B_PAGE_SIZE;
+			if (pageOffset != 0)
+				file_cache_write(fFileCache, cookie, pos - pageOffset, NULL, &pageOffset);
+		}
 		fMaxFileSize = fileSize;
 		fMetaCache.GrowFile(fMaxFileSize);
 	}
 
 	if ((cookie->fMode & O_NOCACHE) != 0) {
 		WriteDirect(cookie, pos, _buffer, _length);
-		Commit();
+		Commit(cookie->fUid, cookie->fGid);
 	}
 
 	return file_cache_write(fFileCache, cookie, pos, _buffer, _length);
@@ -440,13 +458,13 @@ Inode::Write(OpenFileCookie* cookie, off_t pos, const void* _buffer,
 
 
 status_t
-Inode::Commit()
+Inode::Commit(uid_t uid, gid_t gid)
 {
 	if (!fWriteDirty)
 		return B_OK;
 
 	WriteLocker _(fWriteLock);
-	status_t result = CommitWrites();
+	status_t result = CommitWrites(fDelegation != NULL, uid, gid);
 	if (result != B_OK)
 		return result;
 	fWriteDirty = false;

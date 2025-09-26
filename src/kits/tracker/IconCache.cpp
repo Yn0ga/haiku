@@ -668,6 +668,22 @@ IconCache::GetRootIcon(AutoLock<SimpleIconCache>*,
 
 
 IconCacheEntry*
+IconCache::GetPrinterIcon(AutoLock<SimpleIconCache>*,
+	AutoLock<SimpleIconCache>* sharedCacheLocker,
+	AutoLock<SimpleIconCache>** resultingOpenCache,
+	Model*, IconSource &source, IconDrawMode mode,
+	BSize size, LazyBitmapAllocator* lazyBitmap)
+{
+	*resultingOpenCache = sharedCacheLocker;
+	(*resultingOpenCache)->Lock();
+
+	source = kTrackerSupplied;
+
+	return GetIconFromMetaMime(B_PRINTER_MIMETYPE, mode, size, lazyBitmap, 0);
+}
+
+
+IconCacheEntry*
 IconCache::GetWellKnownIcon(AutoLock<SimpleIconCache>*,
 	AutoLock<SimpleIconCache>* sharedCacheLocker,
 	AutoLock<SimpleIconCache>** resultingOpenCache,
@@ -930,7 +946,11 @@ IconCache::Preload(AutoLock<SimpleIconCache>* nodeCacheLocker,
 		IconSource source = model->IconFrom();
 		if (source == kUnknownSource || source == kUnknownNotFromNode) {
 			// fish for special first models and handle them appropriately
-			if (model->IsVolume()) {
+			if (model->IsRoot()) {
+				entry = GetRootIcon(nodeCacheLocker, sharedCacheLocker, &resultingOpenCache, model,
+					source, mode, size, &lazyBitmap);
+				ASSERT(entry != NULL);
+			} else if (model->IsVolume()) {
 				// volume may use specialized icon in the volume node
 				entry = GetNodeIcon(&modelOpener, nodeCacheLocker,
 					&resultingOpenCache, model, source, mode, size,
@@ -941,10 +961,9 @@ IconCache::Preload(AutoLock<SimpleIconCache>* nodeCacheLocker,
 						&resultingOpenCache, model, source, mode,
 						size, &lazyBitmap);
 				}
-			} else if (model->IsRoot()) {
-				entry = GetRootIcon(nodeCacheLocker, sharedCacheLocker,
-					&resultingOpenCache, model, source, mode, size,
-						&lazyBitmap);
+			} else if (model->IsPrintersDir()) {
+				entry = GetPrinterIcon(nodeCacheLocker, sharedCacheLocker,
+					&resultingOpenCache, model, source, mode, size, &lazyBitmap);
 				ASSERT(entry != NULL);
 			} else {
 				if (source == kUnknownSource) {
@@ -999,6 +1018,11 @@ IconCache::Preload(AutoLock<SimpleIconCache>* nodeCacheLocker,
 				case kTrackerSupplied:
 					if (model->IsRoot()) {
 						entry = GetRootIcon(nodeCacheLocker, sharedCacheLocker,
+							&resultingOpenCache, model, source, mode, size,
+							&lazyBitmap);
+						break;
+					} else if (model->IsPrintersDir()) {
+						entry = GetPrinterIcon(nodeCacheLocker, sharedCacheLocker,
 							&resultingOpenCache, model, source, mode, size,
 							&lazyBitmap);
 						break;
@@ -1391,7 +1415,7 @@ IconCache::IconHitTest(BPoint where, const Model* model, IconDrawMode mode,
 
 
 void
-IconCacheEntry::RetireIcons(BObjectList<BBitmap>* retiredBitmapList)
+IconCacheEntry::RetireIcons(BObjectList<BBitmap, true>* retiredBitmapList)
 {
 	if (fLargeIcon != NULL) {
 		retiredBitmapList->AddItem(fLargeIcon);
@@ -1426,7 +1450,7 @@ SharedIconCache::SharedIconCache()
 	:
 	SimpleIconCache("Tracker shared icon cache"),
 	fHashTable(),
-	fRetiredBitmaps(256, true)
+	fRetiredBitmaps(256)
 {
 	fHashTable.Init(256);
 }

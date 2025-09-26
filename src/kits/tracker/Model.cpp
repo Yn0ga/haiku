@@ -59,6 +59,7 @@ All rights reserved.
 #include <NodeMonitor.h>
 #include <Path.h>
 #include <SymLink.h>
+#include <StringList.h>
 #include <Query.h>
 #include <Volume.h>
 #include <VolumeRoster.h>
@@ -727,16 +728,6 @@ Model::FinishSettingUpType()
 
 
 bool
-Model::ShouldUseWellKnownIcon() const
-{
-	if (fBaseType == kDirectoryNode || fBaseType == kVolumeNode
-		|| fBaseType == kTrashNode || fBaseType == kDesktopNode)
-		return !CheckAppIconHint();
-	return false;
-}
-
-
-bool
 Model::CheckAppIconHint() const
 {
 	attr_info info;
@@ -769,7 +760,14 @@ Model::ResetIconFrom()
 	if (InitCheck() != B_OK)
 		return;
 
-	if (ShouldUseWellKnownIcon()) {
+	bool hasAttrIcon = CheckAppIconHint();
+
+	if (hasAttrIcon && (fBaseType == kDesktopNode || fBaseType == kTrashNode)) {
+		// Desktop or Trash with an icon attribute
+		fIconFrom = kNode;
+		return;
+	} else if (!hasAttrIcon && (fBaseType == kDirectoryNode || fBaseType == kVolumeNode)) {
+		// No icon attribute override, check if well-known or root directory
 		BDirectory* directory = dynamic_cast<BDirectory*>(fNode);
 		if (WellKnowEntryList::Match(NodeRef()) > (directory_which)-1) {
 			fIconFrom = kTrackerSupplied;
@@ -779,6 +777,7 @@ Model::ResetIconFrom()
 			return;
 		}
 	}
+
 	fIconFrom = kUnknownSource;
 }
 
@@ -805,6 +804,28 @@ Model::SetPreferredAppSignature(const char* signature)
 		fPreferredAppName = strdup(signature);
 	else
 		fPreferredAppName = NULL;
+}
+
+
+bool
+Model::IsPrintersDir() const
+{
+	BEntry entry(EntryRef());
+	return FSIsPrintersDir(&entry);
+}
+
+
+bool
+Model::InRoot() const
+{
+	return FSInRootDir(EntryRef());
+}
+
+
+bool
+Model::InTrash() const
+{
+	return FSInTrashDir(EntryRef());
 }
 
 
@@ -943,6 +964,9 @@ Model::AttrChanged(const char* attrName)
 bool
 Model::StatChanged()
 {
+	if (fNode == NULL)
+		return false;
+
 	ASSERT(IsNodeOpen());
 	mode_t oldMode = fStatBuf.st_mode;
 	fStatus = fNode->GetStat(&fStatBuf);
@@ -1055,7 +1079,7 @@ enum {
 
 
 static int32
-MatchMimeTypeString(/*const */BString* documentType, const char* handlerType)
+MatchMimeTypeString(const BString& documentType, const char* handlerType)
 {
 	// perform a mime type wildcard match
 	// handler types of the form "text"
@@ -1072,16 +1096,16 @@ MatchMimeTypeString(/*const */BString* documentType, const char* handlerType)
 
 	if (supertypeOnlyLength) {
 		// compare just the supertype
-		tmp = strstr(documentType->String(), "/");
-		if (tmp && (tmp - documentType->String() == supertypeOnlyLength)) {
-			if (documentType->ICompare(handlerType, supertypeOnlyLength) == 0)
+		tmp = strstr(documentType.String(), "/");
+		if (tmp && (tmp - documentType.String() == supertypeOnlyLength)) {
+			if (documentType.ICompare(handlerType, supertypeOnlyLength) == 0)
 				return kMatchSupertype;
 			else
 				return kDontMatch;
 		}
 	}
 
-	if (documentType->ICompare(handlerType) == 0)
+	if (documentType.ICompare(handlerType) == 0)
 		return kMatch;
 
 	return kDontMatch;
@@ -1089,7 +1113,7 @@ MatchMimeTypeString(/*const */BString* documentType, const char* handlerType)
 
 
 int32
-Model::SupportsMimeType(const char* type, const BObjectList<BString>* list,
+Model::SupportsMimeType(const char* type, const BStringList* list,
 	bool exactReason) const
 {
 	ASSERT((type == 0) != (list == 0));
@@ -1123,21 +1147,24 @@ Model::SupportsMimeType(const char* type, const BObjectList<BString>* list,
 				result = kSuperhandlerModel;
 		}
 
-		int32 match;
+		int32 match = kDontMatch;
 
 		if (type != NULL || (list != NULL && list->IsEmpty())) {
 			BString typeString(type);
-			match = MatchMimeTypeString(&typeString, mimeSignature);
+			match = MatchMimeTypeString(typeString, mimeSignature);
 		} else {
-			match = WhileEachListItem(const_cast<BObjectList<BString>*>(list),
-				MatchMimeTypeString, mimeSignature);
-			// const_cast shouldnt be here, have to have it until
-			// MW cleans up
+			const int32 count = list->CountStrings();
+			for (int32 i = 0; i < count; i++) {
+				match = MatchMimeTypeString(list->StringAt(i), mimeSignature);
+				if (match != kDontMatch)
+					break;
+			}
 		}
-		if (match == kMatch)
+
+		if (match == kMatch) {
 			// supports the actual type, it can't get any better
 			return kModelSupportsType;
-		else if (match == kMatchSupertype) {
+		} else if (match == kMatchSupertype) {
 			if (!exactReason)
 				return kModelSupportsSupertype;
 
@@ -1152,7 +1179,7 @@ Model::SupportsMimeType(const char* type, const BObjectList<BString>* list,
 
 
 bool
-Model::IsDropTargetForList(const BObjectList<BString>* list) const
+Model::IsDropTargetForList(const BStringList* list) const
 {
 	switch (CanHandleDrops()) {
 		case kCanHandle:

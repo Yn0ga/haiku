@@ -48,6 +48,11 @@ Request::_SendUDP(Cookie* cookie)
 		hard = fFileSystem->GetConfiguration().fHard;
 	}
 
+	if (fSingleAttempt) {
+		requestTimeout /= 10;
+		retryLimit = 0;
+	}
+
 	result = fServer->WaitCall(rpc, requestTimeout);
 	if (result != B_OK) {
 		int attempts = 1;
@@ -107,6 +112,11 @@ Request::_SendTCP(Cookie* cookie)
 		hard = fFileSystem->GetConfiguration().fHard;
 	}
 
+	if (fSingleAttempt) {
+		requestTimeout /= 10;
+		retryLimit = 0;
+	}
+
 	do {
 		result = fServer->SendCallAsync(fBuilder.Request(), &rpl, &rpc);
 		if (result == B_NO_MEMORY)
@@ -151,9 +161,9 @@ Request::_SendTCP(Cookie* cookie)
 
 
 void
-Request::Reset()
+Request::Reset(uid_t uid, gid_t gid)
 {
-	fBuilder.Reset();
+	fBuilder.Reset(uid, gid);
 	fReply.Reset();
 }
 

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include <syscall_utils.h>
+#include <time_private.h>
 
 #include <syscalls.h>
 #include <user_mutex_defs.h>
@@ -97,8 +98,10 @@ cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex, uint32 flags,
 	cond->waiter_count--;
 
 	// If there are no more waiters, we can change mutexes.
-	if (cond->waiter_count == 0)
+	if (cond->waiter_count == 0) {
 		cond->mutex = NULL;
+		cond->lock = 0;
+	}
 
 	return status;
 }
@@ -117,8 +120,8 @@ cond_signal(pthread_cond_t* cond, bool broadcast)
 		flags |= B_USER_MUTEX_SHARED;
 
 	// release the condition lock
-	atomic_and((int32*)&cond->lock, ~(int32)B_USER_MUTEX_LOCKED);
-	_kern_mutex_unblock((int32*)&cond->lock, flags);
+	if ((atomic_and((int32*)&cond->lock, ~(int32)B_USER_MUTEX_LOCKED) & B_USER_MUTEX_WAITING) != 0)
+		_kern_mutex_unblock((int32*)&cond->lock, flags);
 }
 
 
@@ -133,11 +136,10 @@ int
 pthread_cond_clockwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
 	clockid_t clock_id, const struct timespec* abstime)
 {
-	if (abstime == NULL || abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000 * 1000 * 1000)
+	bigtime_t timeoutMicros;
+	if (abstime == NULL || !timespec_to_bigtime(*abstime, timeoutMicros))
 		RETURN_AND_TEST_CANCEL(EINVAL);
 
-	bigtime_t timeoutMicros = ((bigtime_t)abstime->tv_sec) * 1000000
-		+ abstime->tv_nsec / 1000;
 	uint32 flags = 0;
 	switch (clock_id) {
 		case CLOCK_REALTIME:

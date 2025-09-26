@@ -108,44 +108,38 @@ EntryCache::Add(ino_t dirID, const char* name, ino_t nodeID, bool missing)
 {
 	EntryCacheKey key(dirID, name);
 
-	WriteLocker _(fLock);
-
-	if (fGenerationCount == 0)
-		return B_NO_MEMORY;
-
-	EntryCacheEntry* entry = fEntries.Lookup(key);
-	if (entry != NULL) {
-		entry->node_id = nodeID;
-		entry->missing = missing;
-		if (entry->generation != fCurrentGeneration) {
-			if (entry->index >= 0) {
-				fGenerations[entry->generation].entries[entry->index] = NULL;
-				_AddEntryToCurrentGeneration(entry);
-			}
-		}
-		return B_OK;
-	}
-
-	// Avoid deadlock if system had to wait for free memory
 	const size_t nameLen = strlen(name);
-	entry = (EntryCacheEntry*)malloc_etc(sizeof(EntryCacheEntry) + nameLen,
-		CACHE_DONT_WAIT_FOR_MEMORY);
+	EntryCacheEntry* entry = (EntryCacheEntry*)malloc(sizeof(EntryCacheEntry) + nameLen);
 
 	if (entry == NULL)
 		return B_NO_MEMORY;
 
 	entry->node_id = nodeID;
 	entry->dir_id = dirID;
-	entry->hash = EntryCacheKey::Hash(dirID, name);
+	entry->hash = key.hash;
 	entry->missing = missing;
-	entry->generation = fCurrentGeneration;
 	entry->index = kEntryNotInArray;
+	entry->generation = -1;
 	memcpy(entry->name, name, nameLen + 1);
 
-	fEntries.Insert(entry);
+	ReadLocker readLocker(fLock);
 
-	_AddEntryToCurrentGeneration(entry);
+	if (fGenerationCount == 0) {
+		free(entry);
+		return B_NO_MEMORY;
+	}
 
+	EntryCacheEntry* existingEntry = fEntries.InsertAtomic(entry);
+	if (existingEntry != NULL) {
+		free(entry);
+		entry = existingEntry;
+
+		entry->node_id = nodeID;
+		entry->missing = missing;
+	}
+
+	readLocker.Detach();
+	_AddEntryToCurrentGeneration(entry, entry == existingEntry);
 	return B_OK;
 }
 
@@ -166,6 +160,7 @@ EntryCache::Remove(ino_t dirID, const char* name)
 	if (entry->index >= 0) {
 		// remove the entry from its generation and delete it
 		fGenerations[entry->generation].entries[entry->index] = NULL;
+		writeLocker.Unlock();
 		free(entry);
 	} else {
 		// We can't free it, since another thread is about to try to move it
@@ -190,46 +185,11 @@ EntryCache::Lookup(ino_t dirID, const char* name, ino_t& _nodeID,
 	if (entry == NULL)
 		return false;
 
-	const int32 oldGeneration = atomic_get_and_set(&entry->generation,
-		fCurrentGeneration);
-	if (oldGeneration == fCurrentGeneration || entry->index < 0) {
-		// The entry is already in the current generation or is being moved to
-		// it by another thread.
-		_nodeID = entry->node_id;
-		_missing = entry->missing;
-		return true;
-	}
-
-	// remove from old generation array
-	fGenerations[oldGeneration].entries[entry->index] = NULL;
-	entry->index = kEntryNotInArray;
-
-	// add to the current generation
-	const int32 index = atomic_add(&fGenerations[fCurrentGeneration].next_index, 1);
-	if (index < fGenerations[fCurrentGeneration].entries_size) {
-		fGenerations[fCurrentGeneration].entries[index] = entry;
-		entry->index = index;
-		_nodeID = entry->node_id;
-		_missing = entry->missing;
-		return true;
-	}
-
-	// The current generation is full, so we probably need to clear the oldest
-	// one to make room. We need the write lock for that.
-	readLocker.Unlock();
-	WriteLocker writeLocker(fLock);
-
-	if (entry->index == kEntryRemoved) {
-		// the entry has been removed in the meantime
-		free(entry);
-		return false;
-	}
-
-	_AddEntryToCurrentGeneration(entry);
-
 	_nodeID = entry->node_id;
 	_missing = entry->missing;
-	return true;
+
+	readLocker.Detach();
+	return _AddEntryToCurrentGeneration(entry, true);
 }
 
 
@@ -249,21 +209,62 @@ EntryCache::DebugReverseLookup(ino_t nodeID, ino_t& _dirID)
 }
 
 
-void
-EntryCache::_AddEntryToCurrentGeneration(EntryCacheEntry* entry)
+bool
+EntryCache::_AddEntryToCurrentGeneration(EntryCacheEntry* entry, bool move)
 {
-	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+	ReadLocker readLocker(fLock, true);
+
+	if (move) {
+		const int32 oldGeneration = atomic_get_and_set(&entry->generation,
+			fCurrentGeneration);
+		if (oldGeneration == fCurrentGeneration || entry->index < 0) {
+			// The entry is already in the current generation or is being moved to
+			// it by another thread.
+			return true;
+		}
+
+		// remove from old generation array
+		fGenerations[oldGeneration].entries[entry->index] = NULL;
+		entry->index = kEntryNotInArray;
+	} else {
+		entry->generation = fCurrentGeneration;
+	}
+
+	// add to the current generation
+	int32 index = atomic_add(&fGenerations[fCurrentGeneration].next_index, 1);
+	if (index < fGenerations[fCurrentGeneration].entries_size) {
+		fGenerations[fCurrentGeneration].entries[index] = entry;
+		entry->index = index;
+		return true;
+	}
+
+	// The current generation is full, so we probably need to clear the oldest
+	// one to make room. We need the write lock for that.
+	readLocker.Unlock();
+	WriteLocker writeLocker(fLock);
+
+	// Resize the table if needed, no matter what. (The only other place it can
+	// be resized is Remove(), so this is important.)
+	fEntries.ResizeIfNeeded();
+
+	if (entry->index == kEntryRemoved) {
+		// the entry has been removed in the meantime
+		writeLocker.Unlock();
+		free(entry);
+		return false;
+	}
 
 	// the generation might not be full yet
-	int32 index = fGenerations[fCurrentGeneration].next_index++;
+	index = fGenerations[fCurrentGeneration].next_index++;
 	if (index < fGenerations[fCurrentGeneration].entries_size) {
 		fGenerations[fCurrentGeneration].entries[index] = entry;
 		entry->generation = fCurrentGeneration;
 		entry->index = index;
-		return;
+		return true;
 	}
 
 	// we have to clear the oldest generation
+	EntryCacheEntry* entriesToFree = NULL;
 	const int32 newGeneration = (fCurrentGeneration + 1) % fGenerationCount;
 	for (int32 i = 0; i < fGenerations[newGeneration].entries_size; i++) {
 		EntryCacheEntry* otherEntry = fGenerations[newGeneration].entries[i];
@@ -271,8 +272,10 @@ EntryCache::_AddEntryToCurrentGeneration(EntryCacheEntry* entry)
 			continue;
 
 		fGenerations[newGeneration].entries[i] = NULL;
-		fEntries.Remove(otherEntry);
-		free(otherEntry);
+		fEntries.RemoveUnchecked(otherEntry);
+
+		otherEntry->hash_link = entriesToFree;
+		entriesToFree = otherEntry;
 	}
 
 	// set the new generation and add the entry
@@ -281,4 +284,14 @@ EntryCache::_AddEntryToCurrentGeneration(EntryCacheEntry* entry)
 	fGenerations[newGeneration].next_index = 1;
 	entry->generation = newGeneration;
 	entry->index = 0;
+
+	// free the old entries
+	writeLocker.Unlock();
+	while (entriesToFree != NULL) {
+		EntryCacheEntry* next = entriesToFree->hash_link;
+		free(entriesToFree);
+		entriesToFree = next;
+	}
+
+	return true;
 }

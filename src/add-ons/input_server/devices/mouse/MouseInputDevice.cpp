@@ -379,15 +379,22 @@ MouseDevice::_ControlThread()
 		BPath path;
 		status_t status = _GetTouchpadSettingsPath(path);
 		BFile settingsFile(path.Path(), B_READ_ONLY);
-		if (status == B_OK && settingsFile.InitCheck() == B_OK) {
-			if (settingsFile.Read(&settings, sizeof(touchpad_settings))
-					!= sizeof(touchpad_settings)) {
+
+		BMessage settingsMsg;
+		status = settingsMsg.Unflatten(&settingsFile);
+		if (status != B_OK) {
+			off_t size;
+			settingsFile.Seek(0, SEEK_SET);
+			if (settingsFile.GetSize(&size) == B_OK && size == 28) {
+				if (settingsFile.Read(&settings, 20) != 20)
+					TRACE("failed to load old settings\n");
+			} else
 				TRACE("failed to load settings\n");
-			}
-		}
+			fTouchpadMovementMaker.SetSettings(settings);
+		} else
+			_UpdateTouchpadSettings(&settingsMsg);
 
 		fTouchpadMovementMaker.SetSpecs(touchpadSpecs);
-		fTouchpadMovementMaker.SetSettings(settings);
 	}
 
 	_UpdateSettings();
@@ -417,6 +424,9 @@ MouseDevice::_ControlThread()
 
 		if (!fIsTouchpad) {
 			if (ioctl(fDevice, MS_READ, &movements, sizeof(movements)) != B_OK) {
+				if (errno == B_INTERRUPTED)
+					continue;
+
 				LOG_ERR("Mouse device exiting, %s\n", strerror(errno));
 				_ControlThreadCleanup();
 				// TOAST!
@@ -429,7 +439,7 @@ MouseDevice::_ControlThread()
 			status_t status = ioctl(fDevice, MS_READ_TOUCHPAD, &read, sizeof(read));
 			if (status < 0)
 				status = errno;
-			if (status != B_OK && status != B_TIMED_OUT) {
+			if (status != B_OK && status != B_INTERRUPTED && status != B_TIMED_OUT) {
 				LOG_ERR("Mouse (touchpad) device exiting, %s\n", strerror(errno));
 				_ControlThreadCleanup();
 				// TOAST!
@@ -461,10 +471,9 @@ MouseDevice::_ControlThread()
 					_UpdateTouchpadSettings(fTouchpadSettingsMessage);
 					delete fTouchpadSettingsMessage;
 					fTouchpadSettingsMessage = NULL;
-				} else
-					_UpdateSettings();
-			} else
-				_UpdateSettings();
+				}
+			}
+			_UpdateSettings();
 		}
 
 		uint32 buttons = lastButtons ^ movements.buttons;
@@ -517,7 +526,11 @@ MouseDevice::_ControlThread()
 				&& message->AddFloat("be:wheel_delta_x",
 					movements.wheel_xdelta) == B_OK
 				&& message->AddFloat("be:wheel_delta_y",
-					movements.wheel_ydelta) == B_OK)
+					movements.wheel_ydelta) == B_OK
+				&& message->AddInt32("be:device_subtype",
+					fIsTouchpad
+						? B_TOUCHPAD_POINTING_DEVICE
+						: B_MOUSE_POINTING_DEVICE) == B_OK)
 				fTarget.EnqueueMessage(message);
 			else
 				delete message;
@@ -602,6 +615,7 @@ status_t
 MouseDevice::_UpdateTouchpadSettings(BMessage* message)
 {
 	touchpad_settings settings;
+	message->FindBool("scroll_reverse", &settings.scroll_reverse);
 	message->FindBool("scroll_twofinger", &settings.scroll_twofinger);
 	message->FindBool("scroll_twofinger_horizontal",
 		&settings.scroll_twofinger_horizontal);
@@ -637,7 +651,9 @@ MouseDevice::_BuildMouseMessage(uint32 what, uint64 when, uint32 buttons,
 	if (message->AddInt64("when", when) < B_OK
 		|| message->AddInt32("buttons", buttons) < B_OK
 		|| message->AddInt32("x", deltaX) < B_OK
-		|| message->AddInt32("y", deltaY) < B_OK) {
+		|| message->AddInt32("y", deltaY) < B_OK
+		|| message->AddInt32("be:device_subtype",
+			fIsTouchpad ? B_TOUCHPAD_POINTING_DEVICE : B_MOUSE_POINTING_DEVICE) < B_OK) {
 		delete message;
 		return NULL;
 	}
@@ -714,7 +730,7 @@ MouseDevice::_RemapButtons(uint32 buttons) const
 
 MouseInputDevice::MouseInputDevice()
 	:
-	fDevices(2, true),
+	fDevices(2),
 	fDeviceListLock("MouseInputDevice list")
 {
 	MID_CALLED();

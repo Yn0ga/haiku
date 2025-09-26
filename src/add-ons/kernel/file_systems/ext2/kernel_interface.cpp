@@ -257,15 +257,10 @@ ext2_remove_vnode(fs_volume* _volume, fs_vnode* _node, bool reenter)
 			return status;
 	}
 
-	TRACE("ext2_remove_vnode(): Removing from orphan list\n");
-	status_t status = volume->RemoveOrphan(transaction, inode->ID());
-	if (status != B_OK)
-		return status;
-
 	TRACE("ext2_remove_vnode(): Setting deletion time\n");
 	inode->Node().SetDeletionTime(real_time_clock());
 
-	status = inode->WriteBack(transaction);
+	status_t status = inode->WriteBack(transaction);
 	if (status != B_OK)
 		return status;
 
@@ -576,7 +571,7 @@ ext2_set_flags(fs_volume* _volume, fs_vnode* _node, void* _cookie, int flags)
 
 
 static status_t
-ext2_fsync(fs_volume* _volume, fs_vnode* _node)
+ext2_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	Inode* inode = (Inode*)_node->private_node;
 	return inode->Sync();
@@ -625,22 +620,20 @@ ext2_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 
 	ext2_inode& node = inode->Node();
 	bool updateTime = false;
-	uid_t uid = geteuid();
-
-	bool isOwnerOrRoot = uid == 0 || uid == (uid_t)node.UserID();
-	bool hasWriteAccess = inode->CheckPermissions(W_OK) == B_OK;
 
 	TRACE("ext2_write_stat: Starting transaction\n");
 	Transaction transaction(volume->GetJournal());
 	inode->WriteLockInTransaction(transaction);
+
+	if (check_write_stat_permissions(node.GroupID(), node.UserID(), node.Mode(),
+			mask, stat) != B_OK)
+		return B_NOT_ALLOWED;
 
 	if ((mask & B_STAT_SIZE) != 0 && inode->Size() != stat->st_size) {
 		if (inode->IsDirectory())
 			return B_IS_A_DIRECTORY;
 		if (!inode->IsFile())
 			return B_BAD_VALUE;
-		if (!hasWriteAccess)
-			return B_NOT_ALLOWED;
 
 		TRACE("ext2_write_stat: Old size: %ld, new size: %ld\n",
 			(long)inode->Size(), (long)stat->st_size);
@@ -661,34 +654,22 @@ ext2_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 	}
 
 	if ((mask & B_STAT_MODE) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			return B_NOT_ALLOWED;
 		node.UpdateMode(stat->st_mode, S_IUMSK);
 		updateTime = true;
 	}
 
 	if ((mask & B_STAT_UID) != 0) {
-		// only root should be allowed
-		if (uid != 0)
-			return B_NOT_ALLOWED;
 		node.SetUserID(stat->st_uid);
 		updateTime = true;
 	}
 
 	if ((mask & B_STAT_GID) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			return B_NOT_ALLOWED;
 		node.SetGroupID(stat->st_gid);
 		updateTime = true;
 	}
 
 	if ((mask & B_STAT_MODIFICATION_TIME) != 0 || updateTime
 		|| (mask & B_STAT_CHANGE_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			return B_NOT_ALLOWED;
 		struct timespec newTimespec = { 0, 0};
 
 		if ((mask & B_STAT_MODIFICATION_TIME) != 0)
@@ -704,9 +685,6 @@ ext2_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 		inode->SetModificationTime(&newTimespec);
 	}
 	if ((mask & B_STAT_CREATION_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			return B_NOT_ALLOWED;
 		inode->SetCreationTime(&stat->st_crtim);
 	}
 
@@ -1147,9 +1125,10 @@ ext2_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 	// any data from it.
 	if (inode->IsDirectory() && (openMode & O_RWMASK) != 0)
 		return B_IS_A_DIRECTORY;
+	if ((openMode & O_DIRECTORY) != 0 && !inode->IsDirectory())
+		return B_NOT_A_DIRECTORY;
 
-	status_t status =  inode->CheckPermissions(open_mode_to_access(openMode)
-		| (openMode & O_TRUNC ? W_OK : 0));
+	status_t status =  inode->CheckPermissions(open_mode_to_access(openMode));
 	if (status != B_OK)
 		return status;
 

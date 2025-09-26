@@ -441,10 +441,12 @@ XHCI::XHCI(pci_info *info, 	pci_device_module_info* pci, pci_device* device, Sta
 	// Assume ownership of the controller from the BIOS.
 	uint32 eec = 0xffffffff;
 	uint32 eecp = HCS0_XECP(cparams) << 2;
-	for (; eecp != 0 && XECP_NEXT(eec); eecp += XECP_NEXT(eec) << 2) {
+	for (; eecp != 0 && XECP_NEXT(eec) != 0; eecp += XECP_NEXT(eec) << 2) {
 		TRACE("eecp register: 0x%08" B_PRIx32 "\n", eecp);
 
 		eec = ReadCapReg32(eecp);
+		if (eec == 0xffffffff)
+			break;
 		if (XECP_ID(eec) != XHCI_LEGSUP_CAPID)
 			continue;
 
@@ -476,12 +478,12 @@ XHCI::XHCI(pci_info *info, 	pci_device_module_info* pci, pci_device* device, Sta
 			// and then freeze the system when interrupts are generated.
 			WriteCapReg32(eecp, eec & ~XHCI_LEGSUP_BIOSOWNED);
 		}
+
+		uint32 legctlsts = ReadCapReg32(eecp + XHCI_LEGCTLSTS);
+		legctlsts &= (XHCI_LEGCTLSTS_RESERVED_BITS | XHCI_LEGCTLSTS_READONLY_BITS);
+		WriteCapReg32(eecp + XHCI_LEGCTLSTS, legctlsts);
 		break;
 	}
-	uint32 legctlsts = ReadCapReg32(eecp + XHCI_LEGCTLSTS);
-	legctlsts &= XHCI_LEGCTLSTS_DISABLE_SMI;
-	legctlsts |= XHCI_LEGCTLSTS_EVENTS_SMI;
-	WriteCapReg32(eecp + XHCI_LEGCTLSTS, legctlsts);
 
 	// We need to explicitly take ownership of EHCI ports on earlier Intel chipsets.
 	if (fPCIInfo->vendor_id == PCI_VENDOR_INTEL) {
@@ -872,6 +874,11 @@ XHCI::SubmitControlRequest(Transfer *transfer)
 		return B_NO_INIT;
 	}
 
+	if (transfer->IsPhysical()) {
+		// We don't handle this case.
+		return B_NOT_SUPPORTED;
+	}
+
 	status_t status = transfer->InitKernelAccess();
 	if (status != B_OK)
 		return status;
@@ -902,13 +909,13 @@ XHCI::SubmitControlRequest(Transfer *transfer)
 			| TRB_2_BYTES(requestData->Length)
 			| TRB_2_TD_SIZE(0);
 		descriptor->trbs[index].flags = TRB_3_TYPE(TRB_TYPE_DATA_STAGE)
-				| (directionIn ? TRB_3_DIR_IN : 0)
-				| TRB_3_CYCLE_BIT;
+			| (directionIn ? TRB_3_DIR_IN : 0)
+			| TRB_3_CYCLE_BIT;
 
 		if (!directionIn) {
 			transfer->PrepareKernelAccess();
-			WriteDescriptor(descriptor, transfer->Vector(),
-				transfer->VectorCount(), transfer->IsPhysical());
+			memcpy(descriptor->buffers[0],
+				(uint8 *)transfer->Vector()[0].base, requestData->Length);
 		}
 
 		index++;
@@ -980,7 +987,24 @@ XHCI::SubmitNormalRequest(Transfer *transfer)
 	}
 
 	// Now that we know trbSize, compute the count.
-	const int32 trbCount = (transfer->FragmentLength() + trbSize - 1) / trbSize;
+	int32 trbCount = (transfer->FragmentLength() + trbSize - 1) / trbSize;
+
+	generic_io_vec* transferVec = transfer->Vector();
+	generic_size_t transferVecOffset = 0;
+	if (transfer->IsPhysical()) {
+		trbSize = 0;
+		trbCount = 0;
+
+		for (size_t i = 0; i < transfer->VectorCount(); i++) {
+			// There's an XHCI context parameter to indicate if the controller is
+			// 64-bit capable, but for consistency we require 32-bit DMA.
+			if ((transferVec[i].base + transferVec[i].length) > UINT32_MAX)
+				return B_BAD_VALUE;
+
+			trbCount += (transferVec[i].length + endpoint->max_burst_payload - 1)
+				/ endpoint->max_burst_payload;
+		}
+	}
 
 	xhci_td *td = CreateDescriptor(trbCount, trbCount, trbSize);
 	if (td == NULL)
@@ -990,7 +1014,24 @@ XHCI::SubmitNormalRequest(Transfer *transfer)
 	const size_t maxPacketSize = pipe->MaxPacketSize();
 	size_t remaining = transfer->FragmentLength();
 	for (int32 i = 0; i < trbCount; i++) {
-		int32 trbLength = (remaining < trbSize) ? remaining : trbSize;
+		phys_addr_t address;
+		generic_size_t trbLength;
+		if (!transfer->IsPhysical()) {
+			 address = td->buffer_addrs[i];
+			 trbLength = (remaining < trbSize) ? remaining : trbSize;
+		} else {
+			address = transferVec->base + transferVecOffset;
+			trbLength = transferVec->length - transferVecOffset;
+			if (trbLength > endpoint->max_burst_payload)
+				trbLength = endpoint->max_burst_payload;
+
+			transferVecOffset += trbLength;
+			if (transferVecOffset == transferVec->length) {
+				transferVec++;
+				transferVecOffset = 0;
+			}
+		}
+
 		remaining -= trbLength;
 
 		// The "TD Size" field of a transfer TRB indicates the number of
@@ -1001,7 +1042,7 @@ XHCI::SubmitNormalRequest(Transfer *transfer)
 		if (tdSize > 31)
 			tdSize = 31;
 
-		td->trbs[i].address = td->buffer_addrs[i];
+		td->trbs[i].address = address;
 		td->trbs[i].status = TRB_2_IRQ(0)
 			| TRB_2_BYTES(trbLength)
 			| TRB_2_TD_SIZE(tdSize);
@@ -1059,7 +1100,7 @@ XHCI::SubmitNormalRequest(Transfer *transfer)
 	// ENT bit. (XHCI 1.2 § 4.12.3 p250.)
 	td->trbs[td->trb_used - 1].flags |= TRB_3_ENT_BIT;
 
-	if (!directionIn) {
+	if (!directionIn && !transfer->IsPhysical()) {
 		TRACE("copying out iov count %ld\n", transfer->VectorCount());
 		status_t status = transfer->PrepareKernelAccess();
 		if (status != B_OK) {
@@ -1117,12 +1158,8 @@ XHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 		if (td->transfer == NULL)
 			continue;
 
-		// We can't cancel or delete transfers under "force", as they probably
-		// are not safe to use anymore.
-		if (!force) {
-			transfers[transfersCount] = td->transfer;
-			transfersCount++;
-		}
+		transfers[transfersCount] = td->transfer;
+		transfersCount++;
 		td->transfer = NULL;
 	}
 
@@ -1179,7 +1216,12 @@ XHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 	endpointLocker.Unlock();
 
 	for (int32 i = 0; i < transfersCount; i++) {
-		transfers[i]->Finished(B_CANCELED, 0);
+		// If the transfer is canceled by force, the one causing the
+		// cancel is possibly not the one who initiated the transfer
+		// and the callback is likely not safe anymore.
+		if (!force)
+			transfers[i]->Finished(B_CANCELED, 0);
+
 		delete transfers[i];
 	}
 
@@ -1258,7 +1300,7 @@ XHCI::CheckDebugTransfer(Transfer *transfer)
 		status_t status = (td->trb_completion_code == COMP_SUCCESS
 			|| td->trb_completion_code == COMP_SHORT_PACKET) ? B_OK : B_ERROR;
 
-		if (status == B_OK && directionIn) {
+		if (status == B_OK && directionIn && !transfer->IsPhysical()) {
 			ReadDescriptor(td, transfer->Vector(), transfer->VectorCount(),
 				transfer->IsPhysical());
 		}
@@ -3162,7 +3204,7 @@ XHCI::FinishTransfers()
 					actualLength);
 			}
 
-			if (directionIn && actualLength > 0) {
+			if (directionIn && actualLength > 0 && !transfer->IsPhysical()) {
 				TRACE("copying in iov count %ld\n", transfer->VectorCount());
 				status_t status = transfer->PrepareKernelAccess();
 				if (status == B_OK) {

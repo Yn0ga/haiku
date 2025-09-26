@@ -368,13 +368,14 @@ ignore_physical_memory_ranges_beyond_4gb()
 			continue;
 		}
 
-		if (kLimit - range.start < range.size) {
+		if ((range.start + range.size) > kLimit) {
 			// the range is partially beyond the limit
 			dprintf("ignore_physical_memory_ranges_beyond_4gb(): ignoring "
 				"range: %#" B_PRIx64 " - %#" B_PRIx64 "\n", kLimit,
 				range.start + range.size);
 			gKernelArgs.ignored_physical_memory
 				+= range.size - (kLimit - range.start);
+			range.size = kLimit - range.start;
 		}
 
 		break;
@@ -434,7 +435,7 @@ kernel_args_malloc(size_t size, uint8 alignment)
 		// the block is so large, we'll allocate a new block for it
 		void* block = NULL;
 		if (platform_allocate_region(&block, alignedSize,
-				B_READ_AREA | B_WRITE_AREA, false) != B_OK) {
+				B_READ_AREA | B_WRITE_AREA) != B_OK) {
 			return NULL;
 		}
 
@@ -449,10 +450,8 @@ kernel_args_malloc(size_t size, uint8 alignment)
 
 	// just allocate a new block and "close" the old one
 	void* block = NULL;
-	if (platform_allocate_region(&block, kChunkSize, B_READ_AREA | B_WRITE_AREA,
-			false) != B_OK) {
+	if (platform_allocate_region(&block, kChunkSize, B_READ_AREA | B_WRITE_AREA) != B_OK)
 		return NULL;
-	}
 
 	sFirstFree = (void*)((addr_t)block + alignedSize);
 	sLast = block;

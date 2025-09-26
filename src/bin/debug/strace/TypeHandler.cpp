@@ -17,6 +17,7 @@
 #include "MemoryReader.h"
 #include "Syscall.h"
 
+
 template<typename value_t>
 static inline value_t
 get_value(const void *address)
@@ -27,25 +28,28 @@ get_value(const void *address)
 		return *(value_t*)address;
 }
 
+
 // #pragma mark -
 
-// create_pointer_type_handler
+
+// const void *
 TypeHandler *
 create_pointer_type_handler()
 {
 	return new TypeHandlerImpl<const void*>();
 }
 
-// create_string_type_handler
+
+// const char *
 TypeHandler *
 create_string_type_handler()
 {
 	return new TypeHandlerImpl<const char*>();
 }
 
-// #pragma mark -
 
-// complete specializations
+// #pragma mark - complete specializations
+
 
 // void
 template<>
@@ -55,6 +59,7 @@ TypeHandlerImpl<void>::GetParameterValue(Context &, Parameter *, const void *)
 	return "void";
 }
 
+
 template<>
 string
 TypeHandlerImpl<void>::GetReturnValue(Context &, uint64 value)
@@ -62,12 +67,14 @@ TypeHandlerImpl<void>::GetReturnValue(Context &, uint64 value)
 	return "";
 }
 
+
 template<>
 TypeHandler *
 TypeHandlerFactory<void>::Create()
 {
 	return new TypeHandlerImpl<void>();
 }
+
 
 // bool
 template<>
@@ -92,14 +99,16 @@ TypeHandlerFactory<bool>::Create()
 	return new TypeHandlerImpl<bool>();
 }
 
+
 // status_t
+template<typename T>
 class StatusTypeHandler : public TypeHandler {
 public:
 	StatusTypeHandler() {}
 
 	string GetParameterValue(Context &context, Parameter *, const void *address)
 	{
-		return RenderValue(context, get_value<status_t>(address));
+		return RenderValue(context, get_value<T>(address));
 	}
 
 	string GetReturnValue(Context &context, uint64 value)
@@ -111,7 +120,7 @@ private:
 	string RenderValue(Context &context, uint64 value) const
 	{
 		string rendered = context.FormatUnsigned(value);
-		if (value <= UINT32_MAX && (status_t)value <= 0) {
+		if ((T)value <= 0) {
 			rendered += " ";
 			rendered += strerror(value);
 		}
@@ -122,7 +131,13 @@ private:
 TypeHandler *
 create_status_t_type_handler()
 {
-	return new StatusTypeHandler;
+	return new StatusTypeHandler<status_t>;
+}
+
+TypeHandler *
+create_ssize_t_type_handler()
+{
+	return new StatusTypeHandler<ssize_t>;
 }
 
 
@@ -179,7 +194,9 @@ TypeHandlerImpl<const char*>::GetReturnValue(Context &context, uint64 value)
 	return read_string(context, (void *)value);
 }
 
-// #pragma mark - enums, flags
+
+// #pragma mark - enums, flags, enum_flags
+
 
 EnumTypeHandler::EnumTypeHandler(const EnumMap &m) : fMap(m) {}
 
@@ -252,6 +269,43 @@ FlagsTypeHandler::RenderValue(Context &context, unsigned int value) const
 		}
 		if (rendered.empty())
 			rendered = "0";
+		return rendered;
+	}
+
+	return context.FormatUnsigned(value);
+}
+
+
+EnumFlagsTypeHandler::EnumFlagsTypeHandler(const EnumMap &m, const FlagsTypeHandler::FlagsList &l)
+	:
+	EnumTypeHandler(m), fList(l) {}
+
+
+string
+EnumFlagsTypeHandler::RenderValue(Context &context, unsigned int value) const
+{
+	if (context.GetContents(Context::ENUMERATIONS)) {
+		string rendered;
+		FlagsTypeHandler::FlagsList::const_reverse_iterator i = fList.rbegin();
+		for (; i != fList.rend(); i++) {
+			if (value == 0)
+				break;
+			if ((value & i->value) != i->value)
+				continue;
+
+			if (!rendered.empty())
+				rendered.insert(0, "|");
+			rendered.insert(0, i->name);
+			value &= ~(i->value);
+		}
+
+		EnumMap::const_iterator j = fMap.find(value);
+		if (j != fMap.end() && j->second != NULL) {
+			if (!rendered.empty())
+				rendered.insert(0, "|");
+			rendered.insert(0, j->second);
+		}
+
 		return rendered;
 	}
 

@@ -47,18 +47,19 @@ struct vnode;
 /** The I/O context of a process/team, holds the fd array among others */
 typedef struct io_context {
 	struct vnode *root;
+
+	mutable rw_lock lock;
 	struct vnode *cwd;
-	mutex		io_mutex;
 	int32		ref_count;
 	uint32		table_size;
 	uint32		num_used_fds;
 	struct file_descriptor **fds;
 	struct select_info **select_infos;
 	uint8		*fds_close_on_exec;
+	uint8		*fds_close_on_fork;
 	struct list node_monitors;
 	uint32		num_monitors;
 	uint32		max_monitors;
-	bool		inherit_fds;
 } io_context;
 
 
@@ -70,7 +71,7 @@ status_t	vfs_init(struct kernel_args *args);
 status_t	vfs_bootstrap_file_systems(void);
 void		vfs_mount_boot_file_system(struct kernel_args *args);
 void		vfs_exec_io_context(io_context *context);
-io_context*	vfs_new_io_context(io_context* parentContext,
+io_context*	vfs_new_io_context(const io_context *parentContext,
 				bool purgeCloseOnExec);
 void		vfs_get_io_context(io_context *context);
 void		vfs_put_io_context(io_context *context);
@@ -184,7 +185,7 @@ int			_user_open_dir_entry_ref(dev_t device, ino_t inode,
 int			_user_open_dir(int fd, const char *path);
 int			_user_open_parent_dir(int fd, char *name, size_t nameLength);
 status_t	_user_fcntl(int fd, int op, size_t argument);
-status_t	_user_fsync(int fd);
+status_t	_user_fsync(int fd, bool dataOnly);
 status_t	_user_flock(int fd, int op);
 status_t	_user_read_stat(int fd, const char *path, bool traverseLink,
 				struct stat *stat, size_t statSize);
@@ -206,7 +207,7 @@ status_t	_user_unlink(int fd, const char *path);
 status_t	_user_rename(int oldFD, const char *oldpath, int newFD,
 				const char *newpath);
 status_t	_user_create_fifo(int fd, const char *path, mode_t perms);
-status_t	_user_create_pipe(int *fds);
+status_t	_user_create_pipe(int *fds, int flags);
 status_t	_user_access(int fd, const char *path, int mode,
 				bool effectiveUserGroup);
 ssize_t		_user_select(int numfds, fd_set *readSet, fd_set *writeSet,
@@ -250,10 +251,11 @@ ssize_t		_user_read_dir(int fd, struct dirent *buffer, size_t bufferSize,
 status_t	_user_rewind_dir(int fd);
 status_t	_user_close(int fd);
 int			_user_dup(int fd);
-int			_user_dup2(int ofd, int nfd);
+int			_user_dup2(int ofd, int nfd, int flags);
 status_t	_user_lock_node(int fd);
 status_t	_user_unlock_node(int fd);
 status_t	_user_preallocate(int fd, off_t offset, off_t length);
+status_t	_user_close_range(u_int minFd, u_int maxFd, int flags);
 
 /* socket user prototypes (implementation in socket.cpp) */
 int			_user_socket(int family, int type, int protocol);
@@ -264,7 +266,7 @@ status_t	_user_connect(int socket, const struct sockaddr *address,
 				socklen_t addressLength);
 status_t	_user_listen(int socket, int backlog);
 int			_user_accept(int socket, struct sockaddr *address,
-				socklen_t *_addressLength);
+				socklen_t *_addressLength, int flags);
 ssize_t		_user_recv(int socket, void *data, size_t length, int flags);
 ssize_t		_user_recvfrom(int socket, void *data, size_t length, int flags,
 				struct sockaddr *address, socklen_t *_addressLength);

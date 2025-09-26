@@ -233,7 +233,7 @@ add_ancillary_data(net_socket* socket, ancillary_data_container* container,
 
 static status_t
 process_ancillary_data(net_socket* socket, ancillary_data_container* container,
-	msghdr* messageHeader)
+	msghdr* messageHeader, int flags)
 {
 	uint8* dataBuffer = (uint8*)messageHeader->msg_control;
 	int dataBufferLen = messageHeader->msg_controllen;
@@ -243,31 +243,22 @@ process_ancillary_data(net_socket* socket, ancillary_data_container* container,
 		return B_OK;
 	}
 
-	ancillary_data_header header;
-	void* data = NULL;
+	if (socket->first_info->process_ancillary_data == NULL)
+		return B_NOT_SUPPORTED;
 
-	while ((data = next_ancillary_data(container, data, &header)) != NULL) {
-		if (socket->first_info->process_ancillary_data == NULL)
-			return B_NOT_SUPPORTED;
+	ssize_t bytesWritten = socket->first_info->process_ancillary_data(
+		socket->first_protocol, container, dataBuffer, dataBufferLen, flags);
+	if (bytesWritten < 0)
+		return bytesWritten;
 
-		ssize_t bytesWritten = socket->first_info->process_ancillary_data(
-			socket->first_protocol, &header, data, dataBuffer, dataBufferLen);
-		if (bytesWritten < 0)
-			return bytesWritten;
-
-		dataBuffer += bytesWritten;
-		dataBufferLen -= bytesWritten;
-	}
-
-	messageHeader->msg_controllen -= dataBufferLen;
-
+	messageHeader->msg_controllen = bytesWritten;
 	return B_OK;
 }
 
 
 static status_t
 process_ancillary_data(net_socket* socket,
-	net_buffer* buffer, msghdr* messageHeader)
+	net_buffer* buffer, msghdr* messageHeader, int flags)
 {
 	void *dataBuffer = messageHeader->msg_control;
 	ssize_t bytesWritten;
@@ -277,8 +268,10 @@ process_ancillary_data(net_socket* socket,
 		return B_OK;
 	}
 
-	if (socket->first_info->process_ancillary_data_no_container == NULL)
-		return B_NOT_SUPPORTED;
+	if (socket->first_info->process_ancillary_data_no_container == NULL) {
+		messageHeader->msg_controllen = 0;
+		return B_OK;
+	}
 
 	bytesWritten = socket->first_info->process_ancillary_data_no_container(
 		socket->first_protocol, buffer, dataBuffer,
@@ -304,7 +297,7 @@ socket_receive_no_buffer(net_socket* socket, msghdr* header, void* data,
 	ancillary_data_container* ancillaryData = NULL;
 	ssize_t bytesRead = socket->first_info->read_data_no_buffer(
 		socket->first_protocol, vecs, vecCount, &ancillaryData, address,
-		addressLen, flags);
+		addressLen, flags & ~(MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK));
 	if (bytesRead < 0)
 		return bytesRead;
 
@@ -314,7 +307,8 @@ socket_receive_no_buffer(net_socket* socket, msghdr* header, void* data,
 
 	// process ancillary data
 	if (header != NULL) {
-		status_t status = process_ancillary_data(socket, ancillaryData, header);
+		status_t status = process_ancillary_data(socket, ancillaryData, header,
+			flags & (MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK));
 		if (status != B_OK)
 			return status;
 
@@ -894,6 +888,8 @@ int
 socket_accept(net_socket* socket, struct sockaddr* address,
 	socklen_t* _addressLength, net_socket** _acceptedSocket)
 {
+	if (socket->type != SOCK_STREAM)
+		return B_NOT_SUPPORTED;
 	if ((socket->options & SO_ACCEPTCONN) == 0)
 		return B_BAD_VALUE;
 
@@ -971,8 +967,10 @@ socket_getpeername(net_socket* _socket, struct sockaddr* address,
 	net_socket_private* socket = (net_socket_private*)_socket;
 	BReference<net_socket_private> parent = socket->parent.GetReference();
 
-	if ((!parent.IsSet() && !socket->is_connected) || socket->peer.ss_len == 0)
+	if ((!parent.IsSet() && !socket->is_connected) || socket->peer.ss_len == 0
+		|| socket->peer.ss_family == AF_UNSPEC) {
 		return ENOTCONN;
+	}
 
 	memcpy(address, &socket->peer, min_c(*_addressLength, socket->peer.ss_len));
 	*_addressLength = socket->peer.ss_len;
@@ -1155,7 +1153,8 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 
 	size_t totalLength = length;
 	if (header != NULL) {
-		ASSERT(data == header->msg_iov[0].iov_base);
+		ASSERT((header->msg_iovlen == 0 && data == NULL)
+			|| data == header->msg_iov[0].iov_base);
 
 		// calculate the length considering all of the extra buffers
 		for (int i = 1; i < header->msg_iovlen; i++)
@@ -1174,9 +1173,9 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 			ancillary_data_container* container
 				= gNetBufferModule.get_ancillary_data(buffer);
 			if (container != NULL)
-				status = process_ancillary_data(socket, container, header);
+				status = process_ancillary_data(socket, container, header, flags);
 			else
-				status = process_ancillary_data(socket, buffer, header);
+				status = process_ancillary_data(socket, buffer, header, flags);
 			if (status != B_OK) {
 				gNetBufferModule.free(buffer);
 				return status;

@@ -785,8 +785,8 @@ update_current_thread_signals_flag()
 static void
 update_team_threads_signal_flag(Team* team)
 {
-	for (Thread* thread = team->thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = team->thread_list.First(); thread != NULL;
+			thread = team->thread_list.GetNext(thread)) {
 		update_thread_signals_flag(thread);
 	}
 }
@@ -1307,8 +1307,8 @@ is_team_signal_blocked(Team* team, int signal)
 {
 	sigset_t mask = SIGNAL_TO_MASK(signal);
 
-	for (Thread* thread = team->thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = team->thread_list.First(); thread != NULL;
+			thread = team->thread_list.GetNext(thread)) {
 		if ((thread->sig_block_mask & mask) == 0)
 			return false;
 	}
@@ -1672,8 +1672,8 @@ send_signal_to_team_locked(Team* team, uint32 signalNumber, Signal* signal,
 		case SIGCONT:
 			// Wake up any suspended threads, interrupt the others, if they
 			// don't block the signal.
-			for (Thread* thread = team->thread_list; thread != NULL;
-					thread = thread->team_next) {
+			for (Thread* thread = team->thread_list.First(); thread != NULL;
+					thread = team->thread_list.GetNext(thread)) {
 				thread->going_to_suspend = false;
 
 				SpinLocker _(thread->scheduler_lock);
@@ -1698,8 +1698,8 @@ send_signal_to_team_locked(Team* team, uint32 signalNumber, Signal* signal,
 		case SIGTTOU:
 			// send the stop signal to all threads
 			// TODO: Is that correct or should we only target the main thread?
-			for (Thread* thread = team->thread_list; thread != NULL;
-					thread = thread->team_next) {
+			for (Thread* thread = team->thread_list.First(); thread != NULL;
+					thread = team->thread_list.GetNext(thread)) {
 				thread->AddPendingSignal(signalNumber);
 			}
 
@@ -1714,8 +1714,8 @@ send_signal_to_team_locked(Team* team, uint32 signalNumber, Signal* signal,
 		default:
 			// Interrupt all interruptibly waiting threads, if the signal is
 			// not masked.
-			for (Thread* thread = team->thread_list; thread != NULL;
-					thread = thread->team_next) {
+			for (Thread* thread = team->thread_list.First(); thread != NULL;
+					thread = team->thread_list.GetNext(thread)) {
 				sigset_t nonBlocked = ~thread->sig_block_mask
 					| SIGNAL_TO_MASK(SIGCHLD);
 				if ((thread->AllPendingSignals() & nonBlocked) != 0) {
@@ -1828,7 +1828,7 @@ send_signal_to_process_group_locked(ProcessGroup* group, const Signal& signal,
 
 	bool firstTeam = true;
 
-	for (Team* team = group->teams; team != NULL; team = team->group_next) {
+	for (Team* team = group->teams.First(); team != NULL; team = group->teams.GetNext(team)) {
 		status_t error = send_signal_to_team(team, signal,
 			flags | B_DO_NOT_RESCHEDULE);
 		// If sending to the first team in the group failed, let the whole call
@@ -2030,8 +2030,8 @@ sigaction_internal(int signal, const struct sigaction* act,
 
 		team->RemovePendingSignal(signal);
 
-		for (Thread* thread = team->thread_list; thread != NULL;
-				thread = thread->team_next) {
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			thread->RemovePendingSignal(signal);
 		}
 	}

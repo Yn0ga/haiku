@@ -2,6 +2,7 @@ OUTPUT_FORMAT("elf32-powerpc", "elf32-powerpc", "elf32-powerpc")
 OUTPUT_ARCH(powerpc)
 
 ENTRY(_start)
+
 SECTIONS
 {
 	. = 0x202000 + SIZEOF_HEADERS;
@@ -9,68 +10,39 @@ SECTIONS
 	__text_begin = .;
 
 	/* text/read-only data */
-	.text :	{ *(.text .text.* .gnu.linkonce.t.*) }
-
-	. = ALIGN(0x4);
-	__ctor_list = .;
-	.ctors : { *(.ctors) *(.init_array) }
-	__ctor_end = .;
-
-	.rodata : { *(.rodata .rodata.*) }
-	.sdata2 : { *(.sdata2) }
+	.text :	{ *(.text .text.* .gnu.linkonce.t.*)
+	          *(.rodata .rodata.* .gnu.linkonce.r.*)
+	          *(.sdata2) }
 
 	/* writable data  */
-	. = ALIGN(0x1000);
-	__data_start = .;
-	.data : { *(.data .gnu.linkonce.d.*) }
-	.data.rel.ro : { *(.data.rel.ro.local .data.rel.ro*) }
-	.data.rel.local : { *(.data.rel.local*) }
-	.got : { *(.got .got2) }
-	.sdata : { *(.sdata .sdata.* .gnu.linkonce.s.*) }
+	/* align to the same offset in the next page (for performance reasons
+	   (not that it really matters in the boot loader)) */
+	. = ALIGN(0x1000) + 0x1000 + (. & (0x1000 - 1));
+
+	.data : {
+		__ctor_list = .;
+		*(.ctors)
+		__ctor_end = .;
+
+		__data_start = .;
+		*(.data .gnu.linkonce.d.*)
+		*(.data.rel.ro.local .data.rel.ro*)
+		*(.got .got2)
+		*(.sdata .sdata.* .gnu.linkonce.s.* .fixup) }
 
 	/* uninitialized data (in same segment as writable data) */
 	__bss_start = .;
-	.sbss : { *(.sbss .sbss.* .gnu.linkonce.sb.*) }
-	.bss : { *(.bss .bss.* .gnu.linkonce.b.*) }
+	.bss : { *(.sbss .sbss.* .gnu.linkonce.sb.*)
 
-	. = ALIGN(0x1000);
+		*(.bss .bss.* .gnu.linkonce.b.*)
+		. = ALIGN(0x1000);
+	}
+
 	_end = . ;
 
-	/* Debug */
-	/* INCLUDE debuginfo.ld */
-	/* not found */ 
-	/* Stabs debugging sections.  */
-  	.stab 0 : { *(.stab) }
-	.stabstr 0 : { *(.stabstr) }
-  	/* DWARF debug sections.
-     	Symbols in the DWARF debugging sections are relative to the beginning
-     	of the section so we begin them at 0.  */
-  	/* DWARF 1 */
-  	.debug          0 : { *(.debug) }
-  	.line           0 : { *(.line) }
- 	/* GNU DWARF 1 extensions */
-  	.debug_srcinfo  0 : { *(.debug_srcinfo) }
-  	.debug_sfnames  0 : { *(.debug_sfnames) }
- 	/* DWARF 1.1 and DWARF 2 */
-  	.debug_aranges  0 : { *(.debug_aranges) }
-  	.debug_pubnames 0 : { *(.debug_pubnames) }
-  	/* DWARF 2 */
-  	.debug_info     0 : { *(.debug_info) }
-  	.debug_abbrev   0 : { *(.debug_abbrev) }
-  	.debug_line     0 : { *(.debug_line) }
- 	.debug_frame    0 : { *(.debug_frame) }
-  	.debug_str      0 : { *(.debug_str) }
-  	.debug_loc      0 : { *(.debug_loc) }
-  	.debug_macinfo  0 : { *(.debug_macinfo) }
-  	/* SGI/MIPS DWARF 2 extensions */
-  	.debug_weaknames 0 : { *(.debug_weaknames) }
-  	.debug_funcnames 0 : { *(.debug_funcnames) }
-  	.debug_typenames 0 : { *(.debug_typenames) }
- 	.debug_varnames  0 : { *(.debug_varnames) }
-  	/* These must appear regardless of  .  */
+	/* Debug  */
+        INCLUDE debuginfo.ld
 
-
-	
 	/* Strip unnecessary stuff */
-	/DISCARD/ : { *(.comment .note .eh_frame .dtors .stab .stabstr .debug*) }
+	/DISCARD/ : { *(.comment .note .eh_frame .dtors .debug_* .gnu.attributes) }
 }

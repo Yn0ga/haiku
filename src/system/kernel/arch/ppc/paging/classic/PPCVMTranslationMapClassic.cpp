@@ -79,7 +79,7 @@
 
 #include <arch/cpu.h>
 #include <arch_mmu.h>
-#include <int.h>
+#include <interrupts.h>
 #include <thread.h>
 #include <slab/Slab.h>
 #include <smp.h>
@@ -138,7 +138,7 @@ PPCVMTranslationMapClassic::~PPCVMTranslationMapClassic()
 #endif
 
 	if (fMapCount > 0) {
-		panic("vm_translation_map.destroy_tmap: map %p has positive map count %ld\n",
+		panic("vm_translation_map.destroy_tmap: map %p has positive map count %d\n",
 			this, fMapCount);
 	}
 
@@ -649,7 +649,9 @@ PPCVMTranslationMapClassic::DebugMarkRangePresent(addr_t start, addr_t end,
 */
 status_t
 PPCVMTranslationMapClassic::UnmapPage(VMArea* area, addr_t address,
-	bool updatePageQueue)
+	bool updatePageQueue, 
+	bool deletingAddressSpace = false,
+	uint32* _flags = NULL)
 {
 	ASSERT(address % B_PAGE_SIZE == 0);
 
@@ -747,7 +749,7 @@ PPCVMTranslationMapClassic::UnmapPage(VMArea* area, addr_t address,
 
 void
 PPCVMTranslationMapClassic::UnmapPages(VMArea* area, addr_t base, size_t size,
-	bool updatePageQueue)
+	bool updatePageQueue, bool deletingAddressSpace = false)
 {
 	panic("%s: UNIMPLEMENTED", __FUNCTION__);
 #if 0//X86
@@ -1259,7 +1261,7 @@ PPCVMTranslationMapClassic::ClearAccessedAndModified(VMArea* area,
 
 	locker.Unlock();
 
-	UnmapPage(area, address, false);
+	UnmapPage(area, address, false, false, NULL);
 		// TODO: Obvious race condition: Between querying and unmapping the
 		// page could have been accessed. We try to compensate by considering
 		// vm_page::{accessed,modified} (which would have been updated by

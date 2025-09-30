@@ -342,7 +342,7 @@ for platform in [ MultiBootSubDirSetup ] {
 
 		local archGrist = [ FGrist src system boot arch $(TARGET_KERNEL_ARCH_DIR) $(platform:G=) ] ;
 		local archObject = boot_arch_$(TARGET_KERNEL_ARCH).o ;
-		local ldflags = $(HAIKU_BOOT_LDFLAGS) $(HAIKU_BOOT_$(platform:G=:U)_LDFLAGS) ;
+		local ldflags = $(HAIKU_BOOT_LDFLAGS) $(HAIKU_BOOT_$(platform:G=:U)_LDFLAGS) -L $(HAIKU_TOP)/src/system/ldscripts/common/ ;
 		ldflags ?= $(TARGET_BOOT_LDFLAGS) ;
 
 		# needed by tarfs, packagefs, and video_splash.cpp
